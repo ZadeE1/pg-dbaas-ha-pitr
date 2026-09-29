@@ -1,0 +1,2280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pg-dbaas-ha-pitr — Architecture</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#11151f; --panel-2:#161b28;
+    --line:#232a3a; --text:#e4e9f2; --muted:#8b95a8; --dim:#5f6a7d;
+    --client:#2dd4bf; --router:#38bdf8; --manager:#60a5fa; --pod:#a78bfa;
+    --pg:#c084fc; --dcs:#fbbf24; --leader:#fb7185; --warn:#f59e0b; --ok:#34d399;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box} html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);
+       font-size:16px;line-height:1.65;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1160px;margin:0 auto;padding:56px 28px 140px}
+  header{border-bottom:1px solid var(--line);padding-bottom:36px;margin-bottom:44px}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;
+           color:var(--dim);margin-bottom:14px}
+  h1{font-size:38px;line-height:1.15;margin:0 0 14px;letter-spacing:-.02em;font-weight:650}
+  h1 .sub{display:block;font-size:19px;color:var(--muted);font-weight:400;letter-spacing:0;margin-top:10px}
+  .meta{font-family:var(--mono);font-size:12.5px;color:var(--dim);margin-top:22px;line-height:1.9}
+  .meta b{color:var(--muted);font-weight:500}
+  h2{font-size:13px;font-family:var(--mono);letter-spacing:.16em;text-transform:uppercase;
+     color:var(--client);margin:76px 0 8px;font-weight:600;padding-bottom:12px;
+     border-bottom:1px solid var(--line)}
+  h3{font-size:19px;margin:38px 0 12px;font-weight:620;letter-spacing:-.01em}
+  h4{font-size:15px;margin:26px 0 8px;font-weight:600;color:var(--muted);
+     font-family:var(--mono);letter-spacing:.02em}
+  p{margin:0 0 16px;max-width:78ch;color:#cdd5e3}
+  p.lead{font-size:17.5px;color:#dbe3f0}
+  strong{color:#fff;font-weight:600}
+  code{font-family:var(--mono);font-size:.875em;background:var(--panel-2);
+       border:1px solid var(--line);border-radius:4px;padding:1.5px 5px;color:#a5f3e6}
+  pre{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+      padding:18px 20px;overflow-x:auto;margin:0 0 20px}
+  pre code{background:none;border:none;padding:0;color:#c9d4e6;font-size:13px;line-height:1.7}
+  ul,ol{margin:0 0 18px;padding-left:22px;max-width:78ch;color:#cdd5e3}
+  li{margin-bottom:9px} li::marker{color:var(--dim)}
+  .box{border:1px solid var(--line);border-left:3px solid var(--dim);
+       background:var(--panel);border-radius:0 10px 10px 0;padding:18px 22px;margin:24px 0}
+  .box p:last-child,.box ul:last-child,.box pre:last-child{margin-bottom:0}
+  .box .tag{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;
+            text-transform:uppercase;font-weight:600;display:block;margin-bottom:9px}
+  .ok{border-left-color:var(--ok)}      .ok .tag{color:var(--ok)}
+  .warn{border-left-color:var(--warn)}   .warn .tag{color:var(--warn)}
+  .bad{border-left-color:var(--leader)}  .bad .tag{color:var(--leader)}
+  .info{border-left-color:var(--router)} .info .tag{color:var(--router)}
+  figure{margin:32px 0 40px}
+  figcaption{font-size:13.5px;color:var(--muted);margin-top:14px;padding-top:14px;
+             border-top:1px solid var(--line);max-width:82ch}
+  figcaption b{color:var(--text);font-weight:600}
+  .figbox{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+          padding:26px 20px;overflow-x:auto}
+  svg{display:block;width:100%;height:auto;min-width:820px}
+  .s-title{font:600 14px var(--sans);fill:var(--text)}
+  .s-sub{font:400 11.5px var(--mono);fill:var(--muted)}
+  .s-lbl{font:500 12px var(--sans);fill:var(--text)}
+  .s-mono{font:500 11px var(--mono);fill:var(--muted)}
+  .s-tiny{font:400 10px var(--mono);fill:var(--dim)}
+  .s-band{fill:#0e1320;stroke:#28324a;stroke-width:1;stroke-dasharray:5 5}
+  .s-host{fill:#131a28;stroke:#31405e;stroke-width:1.5}
+  .tbl{width:100%;border-collapse:collapse;margin:22px 0 26px;font-size:14px}
+  .tbl th{text-align:left;font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;
+          text-transform:uppercase;color:var(--dim);font-weight:600;
+          padding:0 14px 10px 0;border-bottom:1px solid var(--line);white-space:nowrap}
+  .tbl td{padding:13px 14px 13px 0;border-bottom:1px solid var(--line);color:#cdd5e3;vertical-align:top}
+  .tbl td:first-child{font-family:var(--mono);font-size:12.5px;color:#fff;white-space:nowrap}
+  .tbl tr:last-child td{border-bottom:none}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(255px,1fr));gap:14px;margin:26px 0 30px}
+  .card{border:1px solid var(--line);border-radius:11px;padding:18px 20px;background:var(--panel)}
+  .card .h{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;
+           text-transform:uppercase;font-weight:600;margin-bottom:10px}
+  .card p{font-size:14px;margin:0;color:var(--muted);line-height:1.6}
+  .card.good{border-top:2px solid var(--ok)}       .card.good .h{color:var(--ok)}
+  .card.risk{border-top:2px solid var(--warn)}      .card.risk .h{color:var(--warn)}
+  .card.bad{border-top:2px solid var(--leader)}    .card.bad .h{color:var(--leader)}
+  .glossary{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:0 34px;margin:22px 0 34px}
+  .gl{display:flex;gap:14px;padding:9px 0;border-bottom:1px solid var(--line)}
+  .gl .t{font-family:var(--mono);font-size:12px;color:var(--client);min-width:82px;font-weight:600;flex:none}
+  .gl .d{font-size:13.5px;color:var(--muted);line-height:1.5}
+  .hopnum{fill:#0b0e14;stroke-width:1.5} .hops{fill:#7dd3fc}
+  @media print{body{background:#fff;color:#111}h2{color:#0a6e5a;border-color:#ddd}
+    .figbox,.box,.tbl{background:#fff;border-color:#ddd}p,li,.tbl td{color:#222}h1{color:#000}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">pg-dbaas-ha-pitr &nbsp;/&nbsp; architecture &nbsp;/&nbsp; revision 3</div>
+  <h1>Self-hosted HA Postgres, orchestrated by a stateless control machine
+    <span class="sub">3 managers &nbsp;·&nbsp; 1 Pod each &nbsp;·&nbsp; a gateway sidecar next to your app &nbsp;·&nbsp; Cloudflare Mesh &nbsp;·&nbsp; strict synchronous replication</span>
+  </h1>
+  <div class="meta">
+    <b>Hosts</b> &nbsp; 2 &times; Oracle VPS in one region + 1 machine at home, all Ubuntu<br>
+    <b>Overlay</b> &nbsp; Cloudflare Mesh &mdash; Layer 3, <code>100.96.0.0/12</code>, inner MTU 1381<br>
+    <b>Runtime</b> &nbsp; Docker, Pods on <code>--network host</code>, ports from a reserved range<br>
+    <b>Durability</b> &nbsp; Patroni, strict synchronous replication, 3 &rarr; 2 &rarr; 1 degradation curve<br>
+    <b>Status</b> &nbsp; all architectural decisions closed. Lifecycle surfaces are the remaining work
+  </div>
+</header>
+
+<p class="lead">
+Every decision that was open in revision 2 is now made. This is no longer a set of recommendations
+&mdash; it is the design. The one thing it deliberately does not specify is lifecycle: backups,
+point-in-time recovery, deletion, and secrets. Those are listed in &sect;14 with the decision each one
+needs.
+</p>
+
+<div class="cards">
+  <div class="card good">
+    <div class="h">Locked</div>
+    <p>Cloudflare Mesh, Layer 3. Docker on host networking. A reserved port range with no proxy. Strict synchronous replication, so an acknowledged order exists on two machines. One gateway sidecar per app.</p>
+  </div>
+  <div class="card risk">
+    <div class="h">Deliberate costs</div>
+    <p>Host networking needs rootful Docker. Strict sync stops writes when one Pod is left. The DCS is pinned 1:1 to managers, so two host losses means every cluster goes read-only.</p>
+  </div>
+  <div class="card bad">
+    <div class="h">Not designed</div>
+    <p>Backups and PITR. Cluster deletion. Secret distribution. Upgrades. The difference between a demo and a database you keep real orders in.</p>
+  </div>
+</div>
+
+
+<h2>00 &nbsp;/&nbsp; Start here</h2>
+
+<p class="lead">
+This section assumes you have never heard of any of this. It explains what you are building and why, lists
+everything you need before you begin, defines every word the rest of the document uses, and then walks
+through the first hour end to end. If you read nothing else, read this.
+</p>
+
+<h3>What you are building, in plain words</h3>
+
+<p>
+You want a database that keeps working when a machine dies, and a way to create new ones without becoming
+a database administrator. This is what that looks like from the outside.
+</p>
+
+<p>
+You have three computers. On each one runs a small program called a <strong>manager</strong>. A manager
+does not serve your application and does not hold your data. It is a supervisor: it reads a list of what
+<em>should</em> be running, and it makes that true. That list lives in a shared database of its own &mdash;
+we call that the <strong>DCS</strong>, the Distributed Configuration Store &mdash; and every manager reads
+the same list, so they all agree without ever talking to each other.
+</p>
+
+<p>
+The actual databases are called <strong>Pods</strong>. Three Pods, one on each machine, hold copies of the
+same data. One of them accepts writes. The other two follow along. That is <em>replication</em>, and it is
+the entire reason your site survives a dead machine: if the machine holding the writer dies, one of the
+others is promoted and takes over in about thirty seconds.
+</p>
+
+<p>
+Your application never talks to a Pod directly, because the address of the writer changes whenever a machine
+dies. Instead a small program called a <strong>gateway</strong> sits inside your application's own
+container setup and does the looking-up. Your code points at <code>localhost</code> and is completely
+unaware. The gateway is a few hundred lines of configuration and holds no state of its own.
+</p>
+
+<p>
+To create all of this you type one command into a terminal. You do not need a laptop plugged in afterwards.
+The program that ran the command is a <strong>control machine</strong>, and you can close it, switch it off,
+or throw it away. Nothing it did is stored on it.
+</p>
+
+<figure>
+<div class="figbox">
+<svg viewBox="0 0 1120 400" role="img" aria-label="A 200-word mental model: your application talks to a gateway, the gateway finds the current writer, three Pods hold the data, and a shared store tells the managers what to run">
+  <defs>
+    <marker id="z1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#38bdf8"/></marker>
+    <marker id="z2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c084fc"/></marker>
+    <marker id="z3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#fbbf24"/></marker>
+  </defs>
+
+  <text class="s-tiny" x="24" y="22" letter-spacing="1.4">THE FIVE THINGS AND HOW THEY TALK</text>
+
+  <rect x="24" y="36" width="196" height="88" rx="10" fill="#0d2b2a" stroke="#2dd4bf" stroke-width="1.5"/>
+  <text class="s-lbl" x="42" y="62" fill="#5eead4">MedusaJS</text>
+  <text class="s-tiny" x="42" y="82">your e-commerce site</text>
+  <text class="s-tiny" x="42" y="102">knows nothing about any of this</text>
+
+  <line x1="220" y1="80" x2="256" y2="80" stroke="#38bdf8" stroke-width="2" marker-end="url(#z1)"/>
+  <text class="s-tiny" x="238" y="72" text-anchor="middle" fill="#7dd3fc">TCP</text>
+
+  <rect x="260" y="36" width="196" height="88" rx="10" fill="#0d2230" stroke="#38bdf8" stroke-width="1.75"/>
+  <text class="s-lbl" x="278" y="62" fill="#7dd3fc">gateway</text>
+  <text class="s-tiny" x="278" y="82">asks every Pod:</text>
+  <text class="s-tiny" x="278" y="100">"are you the writer?"</text>
+  <text class="s-tiny" x="278" y="116">forwards to whoever says yes</text>
+
+  <line x1="456" y1="80" x2="492" y2="80" stroke="#c084fc" stroke-width="2" marker-end="url(#z2)"/>
+  <text class="s-tiny" x="474" y="72" text-anchor="middle" fill="#c4b5fd">finds</text>
+
+  <rect x="496" y="36" width="300" height="150" rx="10" fill="#14102a" stroke="#a78bfa" stroke-width="1.5"/>
+  <text class="s-lbl" x="514" y="58" fill="#c4b5fd">three Pods, one copy each</text>
+  <rect x="514" y="70" width="264" height="30" rx="6" fill="#2a1220" stroke="#fb7185" stroke-width="1.5"/>
+  <text class="s-tiny" x="528" y="89" fill="#fda4af">writer &mdash; the only one taking writes right now</text>
+  <rect x="514" y="106" width="264" height="26" rx="6" fill="#1a1430" stroke="#a78bfa" stroke-width="1.25"/>
+  <text class="s-tiny" x="528" y="123">follower &mdash; an exact copy, a few milliseconds behind</text>
+  <rect x="514" y="138" width="264" height="26" rx="6" fill="#1a1430" stroke="#a78bfa" stroke-width="1.25"/>
+  <text class="s-tiny" x="528" y="155">follower &mdash; an exact copy, a few milliseconds behind</text>
+  <text class="s-tiny" x="514" y="178" fill="#8b95a8">all three live on different machines</text>
+
+  <line x1="796" y1="80" x2="832" y2="80" stroke="#fbbf24" stroke-width="2" marker-end="url(#z3)"/>
+  <text class="s-tiny" x="814" y="72" text-anchor="middle" fill="#fcd34d">agree</text>
+
+  <rect x="836" y="36" width="260" height="150" rx="10" fill="#2a2008" stroke="#fbbf24" stroke-width="1.5"/>
+  <text class="s-lbl" x="854" y="58" fill="#fcd34d">the shared store</text>
+  <text class="s-tiny" x="854" y="80">holds almost nothing:</text>
+  <text class="s-tiny" x="854" y="98">- who the writer is</text>
+  <text class="s-tiny" x="854" y="114">- who is allowed to run what</text>
+  <text class="s-tiny" x="854" y="130">- each Pod's settings</text>
+  <text class="s-tiny" x="854" y="152" fill="#fcd34d">never your data</text>
+  <text class="s-tiny" x="854" y="172" fill="#8b95a8">it runs on all three machines</text>
+
+  <rect x="24" y="200" width="1072" height="106" rx="11" fill="#0d2b2a" stroke="#2dd4bf" stroke-width="1.25"/>
+  <text class="s-lbl" x="46" y="226" fill="#5eead4">The control machine &mdash; a terminal you type into, and then never again</text>
+  <text class="s-mono" x="46" y="252" fill="#a5f3e6">pgdbaas cluster create ecom-db --nodes n1,n2,n3 --pg 16</text>
+  <text class="s-tiny" x="46" y="274">This one command writes the plan into the shared store. The three managers notice, build their Pods, and</text>
+  <text class="s-tiny" x="46" y="292">coordinate themselves from there. Close the terminal. The database is now running and will keep running.</text>
+
+  <text class="s-tiny" x="24" y="336" fill="#38bdf8">&#9650;  a Pod becoming the writer, or losing that role, is the ONLY election in the entire system. The managers never vote and never elect anything.</text>
+  <text class="s-tiny" x="24" y="358" fill="#fb7185">&#9650;  when the writer's machine dies, a follower is promoted automatically and your application's next connection lands on it. Nothing tells your app this happened.</text>
+  <text class="s-tiny" x="24" y="380" fill="#fbbf24">&#9650;  if a write was acknowledged, it is on two machines before the answer was sent. A lost machine cannot lose an order you were told was saved.</text>
+</svg>
+</div>
+<figcaption>
+<b>That is the whole system.</b> Everything later in this document is detail: how the managers agree, how
+the gateway finds the writer, how the overlay carries traffic between your machines, and how you get your
+data back if you delete a table by accident.
+</figcaption>
+</figure>
+
+<h3>What you need before you start</h3>
+
+<p>
+All of this is a one-time setup. Nothing here is a subscription you have to keep paying for beyond
+storage, and nothing requires a credit card for the parts that matter.
+</p>
+
+<table class="tbl">
+  <thead><tr><th>You need</th><th>Why</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>A Cloudflare account</strong></td>
+      <td>Two separate things are built on it: the private network your machines talk over, and the storage your backups live in.</td>
+      <td>The free Zero Trust plan covers three machines and a handful of users comfortably. You are not on a paid tier for the network.</td>
+    </tr>
+    <tr>
+      <td><strong>Cloudflare Zero Trust organisation</strong></td>
+      <td>This is the thing that connects your machines privately. It is separate from a normal Cloudflare zone, and it is where the network is configured.</td>
+      <td>You will enable two settings that are off by default. Both are listed below &mdash; miss either and the network half-works in a way that is confusing to debug.</td>
+    </tr>
+    <tr>
+      <td><strong>Three Ubuntu machines</strong></td>
+      <td>Two Oracle VPS in the same region, plus one at home. Reachable over SSH.</td>
+      <td>The two VPS being in the same region is not a detail you can ignore: it is why your writes cost about 1&nbsp;ms instead of 30. See &sect;09.</td>
+    </tr>
+    <tr>
+      <td><strong>A fourth machine for your app</strong></td>
+      <td>Your MedusaJS store. It does not need to be one of the three, but it does need to be on the private network.</td>
+      <td>Could be the home machine, a VPS, or a laptop. Wherever it is, it becomes a network participant.</td>
+    </tr>
+    <tr>
+      <td><strong>A control machine</strong></td>
+      <td>Any laptop or desktop from which you run the command-line tool.</td>
+      <td>Any operating system. It needs nothing installed permanently, and it is not needed once you are running.</td>
+    </tr>
+    <tr>
+      <td><strong>An R2 bucket</strong></td>
+      <td>Your backups. Object storage, not a disk on a machine.</td>
+      <td>Ten gigabytes free, then about $0.015 per gigabyte per month. <strong>No egress fees</strong>, which is why the automatic restore testing in &sect;13 is free.</td>
+    </tr>
+    <tr>
+      <td><strong>A second Cloudflare account</strong></td>
+      <td>Your second line of defence. See &sect;13.</td>
+      <td>Free to create. The reason it is a separate account is that a locked-out or compromised account takes your first bucket with it.</td>
+    </tr>
+    <tr>
+      <td><strong>Docker on all four machines</strong></td>
+      <td>The runtime everything runs in.</td>
+      <td>Installed by the bootstrap script. You do not install it by hand.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h4>Two settings that are off by default and will waste your afternoon</h4>
+<div class="box warn">
+  <span class="tag">Cloudflare Zero Trust, before anything works</span>
+  <ul>
+    <li><strong>"Allow all Cloudflare One traffic to reach enrolled devices."</strong> Without this, your
+    machines enrol successfully and then cannot see each other at all.</li>
+    <li><strong>Split Tunnels must route the network's address range.</strong> By default the client sends
+    ordinary internet traffic around Cloudflare and <em>excludes</em> the private range. Your machines will
+    be on the network and still unable to reach each other.</li>
+    <li><strong>Assign a unique address to each device.</strong> Every participant needs its own private
+    address. Without it they collide and connections land on the wrong machine.</li>
+    <li><strong>The device profile must use MASQUE, not WireGuard.</strong> Hostname routing and high
+    availability are documented as not working under WireGuard. MASQUE is the default; just do not change it.</li>
+  </ul>
+</div>
+
+<h3>The words this document uses</h3>
+
+<p>
+Four of these are words this project invents, because there is no standard term for them. The rest are
+standard and you will meet them in the documentation of everything underneath. Learning these now will
+make every other page readable.
+</p>
+
+<table class="tbl">
+  <thead><tr><th>Word</th><th>What it means here</th></tr></thead>
+  <tbody>
+    <tr><td>control machine</td><td>Any computer on the network that you run the command-line tool from. Holds no state, needed at no point after setup, safe to delete. Replaces the misleading phrase "stateless laptop".</td></tr>
+    <tr><td>manager</td><td>One long-running container per machine whose only job is supervision. It reads what should be running and makes it so. It holds no data, has no special role, and never votes on anything.</td></tr>
+    <tr><td>Pod</td><td>One PostgreSQL database plus the program supervising it, with its own disk and its own address on the private network. A manager may run several. Three Pods together form one cluster.</td></tr>
+    <tr><td>gateway</td><td>One small container that sits beside your application and forwards its database traffic to whichever Pod is currently the writer. Holds no state. Replaces the word "router", which suggests something that makes routing decisions.</td></tr>
+    <tr><td>cluster</td><td>One logical database. Three Pods, three machines, one answer to every question. Several clusters can share the same machines.</td></tr>
+    <tr><td>the writer</td><td>Also called the <em>primary</em> or <em>master</em> in older documentation. The single Pod accepting writes. Exactly one exists at a time, and only because the shared store says so.</td></tr>
+    <tr><td>follower</td><td>Also called a <em>replica</em> or <em>standby</em>. An exact copy that is a few milliseconds behind and takes no writes.</td></tr>
+    <tr><td>the shared store</td><td>The DCS. A tiny database holding only metadata. Never your data.</td></tr>
+    <tr><td>overlay / the network</td><td>The private network your machines share over the internet. Traffic is encrypted end to end. Referred to by its address range in a few places.</td></tr>
+    <tr><td>WAL</td><td>Write-Ahead Log. PostgreSQL's ordered record of every change. Followers stream this to stay identical. It is what makes a backup restorable to any moment.</td></tr>
+    <tr><td>failover</td><td>The automatic promotion of a follower to writer when the current writer's machine dies. About thirty seconds, no human involved.</td></tr>
+    <tr><td>PITR</td><td>Point-In-Time Recovery. Getting the database back to a specific moment, not merely to the last backup. See &sect;13.</td></tr>
+  </tbody>
+</table>
+
+<h3>Your first hour, end to end</h3>
+
+<p>
+Using the MedusaJS store as the running example throughout. This is the whole operator experience.
+</p>
+
+<pre><code># ---- on the control machine, a fresh laptop -------------------------
+$ pgdbaas node add --host 10.0.0.4 --user deploy --id n1
+$ pgdbaas node add --host 10.0.0.5 --user deploy --id n2
+$ pgdbaas node add --host 10.0.0.6 --user deploy --id n3
+  # each prints what it did on the machine, and reports the address it got
+
+# ---- create the database ---------------------------------------------
+$ pgdbaas cluster create ecom-db --nodes n1,n2,n3 --pg 16
+  n1  enroled,  docker ready,  mesh 100.96.0.11
+  n2  enroled,  docker ready,  mesh 100.96.0.12
+  n3  enroled,  docker ready,  mesh 100.96.0.13
+  waiting for three managers to take their leases ......... ok
+  writing spec /pgdbaas/v1/clusters/ecom-db/spec
+  ecom-0 creating  ecom-1 creating  ecom-2 creating
+  ecom-1 is the writer.  waiting for it to accept connections .... ok
+  backups provisioned: nightly full, continuous archiving, 14-day window
+  done in 2m14s
+
+# ---- check it ------------------------------------------------------
+$ pgdbaas status
+  ecom-db   running   writer ecom-1 (100.96.0.12)
+  $ pgdbaas psql ecom-db
+  ecom-db=# create table products (id serial primary key, name text);
+  ecom-db=# insert into products (name) values ('a very good hat');
+
+# ---- hand it to the application ------------------------------------
+$ pgdbaas gateway emit ecom-db
+  wrote ./ecom-db.env   (add to your app's compose file)
+
+# in docker-compose.yml, alongside medusa:
+#   db-gateway:  image: ghcr.io/you/pgdbaas-gateway:latest
+#                env_file: ./ecom-db.env
+#                ports: ["127.0.0.1:5432:5432"]
+#   medusa:      environment:
+#                  DATABASE_URL: postgres://ecom:...@127.0.0.1:5432/ecom
+#                depends_on: [db-gateway]
+
+$ docker compose up -d
+
+# ---- now the laptop is irrelevant -----------------------------------
+# close it.  the database keeps running, keeps replicating,
+# keeps backing itself up.  nothing is running on your laptop.</code></pre>
+
+<p>
+That is the intended experience. Everything in the rest of this document is either the reasoning behind
+those steps or the behaviour when something goes wrong.
+</p>
+
+<div class="box info">
+  <span class="tag">If you only remember three things</span>
+  <p>
+  <strong>One.</strong> The only election in the system is which Pod is the writer, and it is settled by a
+  shared store, not by the managers. <strong>Two.</strong> Your application talks to a gateway on
+  <code>localhost</code> and never learns a Pod's address, so failover is invisible to it.
+  <strong>Three.</strong> A write is confirmed to you only after it exists on two machines &mdash; so
+  losing a machine cannot lose an order you were told was saved.
+  </p>
+</div>
+<!-- ============================================================ -->
+<h2>Abbreviations</h2>
+<p style="margin-bottom:6px">Every abbreviation in this document, expanded once.</p>
+<div class="glossary">
+  <div class="gl"><span class="t">DCS</span><span class="d"><b>Distributed Configuration Store.</b> A tiny shared key-value store &mdash; here <code>etcd</code> &mdash; holding only metadata: who is primary, cluster settings, member list, desired state. Never your data.</span></div>
+  <div class="gl"><span class="t">WAL</span><span class="d"><b>Write-Ahead Log.</b> PostgreSQL's ordered record of every change. Replicas stream it to stay identical.</span></div>
+  <div class="gl"><span class="t">RTT</span><span class="d"><b>Round-Trip Time.</b> How long a request takes to reach the far side and come back. ~1-2&nbsp;ms between your two VPS, ~25-30&nbsp;ms to your home machine.</span></div>
+  <div class="gl"><span class="t">MTU</span><span class="d"><b>Maximum Transmission Unit.</b> Largest packet a link carries without splitting. Cloudflare Mesh uses 1381; a Docker bridge defaults to 1500. Mismatch is silent.</span></div>
+  <div class="gl"><span class="t">L3 / L7</span><span class="d"><b>OSI network layers.</b> Layer 3 routes whole packets and preserves long-lived connections end to end. Layer 7 understands protocols and terminates them. Replication needs Layer 3.</span></div>
+  <div class="gl"><span class="t">split-brain</span><span class="d">Two Pods both believing they are the writer. Corrupts the dataset, and afterwards you cannot tell which was right. See &sect;09.</span></div>
+  <div class="gl"><span class="t">PITR</span><span class="d"><b>Point-In-Time Recovery.</b> Restoring a database to a chosen moment, not just to the last backup. Needs continuous WAL archiving.</span></div>
+  <div class="gl"><span class="t">pg_hba.conf</span><span class="d">PostgreSQL's host-access file: which host, user and database may connect. The reason preserving source IPs in &sect;05 matters.</span></div>
+</div>
+
+<!-- ============================================================ -->
+<h2>01 &nbsp;/&nbsp; The four things</h2>
+
+<p>
+Two corrections to the vocabulary before anything else, because the old words were doing damage.
+</p>
+
+<div class="box info">
+  <span class="tag">Terminology</span>
+  <p>
+  <strong>Not "stateless laptop."</strong> There is no such thing as a stateless machine. What you have is a
+  <strong>control machine</strong>: a computer on the mesh that runs one CLI. It holds no state, is never
+  needed at runtime, and nobody has to know it is online. Deleting it loses nothing. That is the property
+  that matters, and it is a property of the <em>design</em>, not of a magical machine.
+  </p>
+  <p style="margin-top:12px">
+  <strong>Not "router."</strong> The thing that fronts your database is a <strong>gateway</strong>, and it
+  lives inside your application's own compose file, next to Medusa. Not on its own host, not holding a
+  Pod. It is one more service in the stack you already run.
+  </p>
+</div>
+
+<h3>Control machine &mdash; where the CLI lives</h3>
+<p>
+A laptop, a workstation, a throwaway VM. It runs <code>pgdbaas</code> and it SSHes into your three hosts to
+bootstrap them. After bootstrap it can be closed, powered off, and forgotten. It comes back when you want
+to add a node, inspect a cluster, or destroy one. It is not a daemon and it is not in the data path.
+</p>
+
+<h3>Manager &mdash; one per host, permanently</h3>
+<p>
+A container on each machine whose only job is supervision: read what should be running, make it so, keep
+it so. Managers hold no cluster state, have no leader, and never coordinate with each other about who is
+in charge. A manager that dies takes its Pods with it and nothing else. A manager starting on a new host
+is a cold, empty container that converges.
+</p>
+
+<h3>Pod &mdash; spawned by a manager, many per manager</h3>
+<p>
+Patroni supervising one PostgreSQL instance, with its own data volume and its own DCS scope. Pods are
+disposable. A Pod's peers are the other Pods of the <em>same logical cluster</em>, wherever they live.
+</p>
+
+<h3>Gateway &mdash; one per application, inside your compose file</h3>
+<p>
+A small container beside your app that answers "which Pod is the primary of <strong>ecom-db</strong>
+right now?" and forwards TCP there. It holds no state. Your app points <code>DATABASE_URL</code> at
+<code>localhost</code> and never learns a single Pod address, never sees a failover, and needs no changes
+when the primary moves.
+</p>
+
+<div class="box ok">
+  <span class="tag">The load-bearing idea, restated</span>
+  <p>
+  The only election in the system is per-Pod, inside Patroni, namespaced in the DCS.
+  <code>/service/ecom-db/leader</code> and <code>/service/billing-db/leader</code> are unrelated keys.
+  Everything else &mdash; managers, gateways, your control machine &mdash; has no vote and no lock.
+  </p>
+</div>
+
+
+<!-- ============================================================ -->
+<h2>02 &nbsp;/&nbsp; Who tells the managers to create the Pods</h2>
+
+<p>
+This was the hole in the first draft, and you named it correctly. "Manager A creates the Pod" does not
+create a cluster. Something has to tell Manager B and C that they also owe the system a Pod, and it cannot
+be a conversation between managers &mdash; that is a quorum problem wearing a trench coat.
+</p>
+
+<p>
+The answer is the one Kubernetes arrived at twenty years ago, minus Kubernetes: <strong>the DCS holds the
+desired state, and every manager is an independent reconciler that only acts on its own slice.</strong>
+There is no message, no leader, no coordination. Each manager polls a key, decides what it owns, and makes
+it true.
+</p>
+
+<figure>
+<div class="figbox">
+<svg viewBox="0 0 1120 644" role="img" aria-label="Control machine writes cluster spec to etcd; three managers each watch the spec and reconcile only the Pods assigned to their own node">
+  <defs>
+    <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2dd4bf"/></marker>
+    <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#60a5fa"/></marker>
+    <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#fbbf24"/></marker>
+    <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5f6a7d"/></marker>
+  </defs>
+
+  <!-- control machine -->
+  <rect x="40" y="24" width="360" height="104" rx="11" fill="#0d2b2a" stroke="#2dd4bf" stroke-width="1.75"/>
+  <text class="s-title" x="62" y="52">Control machine &mdash; runs the CLI</text>
+  <text class="s-mono" x="62" y="72">$ pgdbaas node add --host 10.0.0.5 --user deploy</text>
+  <text class="s-mono" x="62" y="90">$ pgdbaas cluster create ecom-db --nodes n1,n2,n3</text>
+  <text class="s-tiny" x="62" y="112">holds no state &middot; can be powered off forever</text>
+
+  <!-- CLI writes spec -->
+  <path d="M220,128 L220,196 L600,196" fill="none" stroke="#2dd4bf" stroke-width="2" marker-end="url(#a1)"/>
+  <text class="s-tiny" x="592" y="188" text-anchor="end" fill="#2dd4bf">WRITE DESIRED STATE &mdash; the only write path</text>
+
+  <!-- DCS -->
+  <rect x="600" y="24" width="480" height="290" rx="12" fill="#2a2008" stroke="#fbbf24" stroke-width="1.75"/>
+  <text class="s-title" x="622" y="50" fill="#fcd34d">etcd &mdash; the control plane</text>
+  <text class="s-mono" x="622" y="70" fill="#fbbf24">3 members, one per host, raft quorum 2</text>
+  <line x1="622" y1="82" x2="1058" y2="82" stroke="#fbbf24" stroke-width="1" opacity=".5"/>
+
+  <text class="s-mono" x="622" y="106" fill="#a5f3e6">/pgdbaas/v1/nodes/n1/lease</text>
+  <text class="s-tiny" x="622" y="122">who is allowed to act as n1 right now &mdash; TTL 15s, CAS</text>
+
+  <text class="s-mono" x="622" y="150" fill="#a5f3e6">/pgdbaas/v1/clusters/ecom-db/spec</text>
+  <text class="s-tiny" x="622" y="166">members: [{ecom-0, node: n1}, {ecom-1, node: n2}, {ecom-2, node: n3}]</text>
+  <text class="s-tiny" x="622" y="180">postgres: {version: 16}   sync: {mode: on, strict: true, node_count: 1}</text>
+
+  <text class="s-mono" x="622" y="204" fill="#a5f3e6">/pgdbaas/v1/clusters/ecom-db/status</text>
+  <text class="s-tiny" x="622" y="220">written by managers, read by the CLI and the gateway. Not an input.</text>
+
+  <line x1="622" y1="234" x2="1058" y2="234" stroke="#fbbf24" stroke-width="1" opacity=".5"/>
+  <text class="s-mono" x="622" y="258" fill="#fcd34d">/service/ecom-db/&hellip;</text>
+  <text class="s-tiny" x="622" y="274">Patroni's own scope. Leader lock, members, config, history.</text>
+  <text class="s-tiny" x="622" y="292">Unrelated to the /pgdbaas/ prefix above. Different job.</text>
+
+  <!-- DCS -> managers -->
+  <path d="M680,314 L680,392 L180,392 L180,432" fill="none" stroke="#60a5fa" stroke-width="1.75" marker-end="url(#a2)"/>
+  <path d="M840,314 L840,432" fill="none" stroke="#60a5fa" stroke-width="1.75" marker-end="url(#a2)"/>
+  <path d="M1000,314 L1000,392 L940,392 L940,432" fill="none" stroke="#60a5fa" stroke-width="1.75" marker-end="url(#a2)"/>
+  <text class="s-tiny" x="852" y="386" fill="#60a5fa">WATCH (every few seconds, resumable)</text>
+
+  <!-- managers -->
+  <rect x="40" y="436" width="280" height="132" rx="10" fill="#131a28" stroke="#60a5fa" stroke-width="1.5"/>
+  <text class="s-lbl" x="60" y="460" fill="#93c5fd">Manager on n1</text>
+  <text class="s-tiny" x="60" y="480">1. acquire lease on /nodes/n1/lease</text>
+  <text class="s-tiny" x="60" y="494">2. read spec, filter members where node=n1</text>
+  <text class="s-tiny" x="60" y="508">3. reconcile: ecom-0 should exist</text>
+  <text class="s-tiny" x="60" y="522">4. write status, renew lease</text>
+  <text class="s-tiny" x="60" y="544" fill="#60a5fa">owns ecom-0 &middot; ignores ecom-1, ecom-2</text>
+  <text class="s-tiny" x="60" y="558" fill="#fb7185">destroys anything the spec does not list</text>
+
+  <rect x="420" y="436" width="280" height="132" rx="10" fill="#131a28" stroke="#60a5fa" stroke-width="1.5"/>
+  <text class="s-lbl" x="440" y="460" fill="#93c5fd">Manager on n2</text>
+  <text class="s-tiny" x="440" y="480">identical loop</text>
+  <text class="s-tiny" x="440" y="494">identical code</text>
+  <text class="s-tiny" x="440" y="508">different lease</text>
+  <text class="s-tiny" x="440" y="522">different slice of the spec</text>
+  <text class="s-tiny" x="440" y="544" fill="#60a5fa">owns ecom-1</text>
+  <text class="s-tiny" x="440" y="558">knows nothing about n1 or n3</text>
+
+  <rect x="800" y="436" width="280" height="132" rx="10" fill="#131a28" stroke="#60a5fa" stroke-width="1.5"/>
+  <text class="s-lbl" x="820" y="460" fill="#93c5fd">Manager on n3</text>
+  <text class="s-tiny" x="820" y="480">identical loop</text>
+  <text class="s-tiny" x="820" y="494">identical code</text>
+  <text class="s-tiny" x="820" y="508">different lease</text>
+  <text class="s-tiny" x="820" y="522">different slice of the spec</text>
+  <text class="s-tiny" x="820" y="544" fill="#60a5fa">owns ecom-2</text>
+  <text class="s-tiny" x="820" y="558">knows nothing about n1 or n2</text>
+
+  <!-- notes -->
+  <text class="s-tiny" x="40" y="596" fill="#fb7185">&#9650;  the node lease is the one safety property that matters. Two managers claiming the same node-id would</text>
+  <text class="s-tiny" x="40" y="612" fill="#fb7185">run two Pods over one data volume. The lease makes the second one exit. Placement is explicit too: the</text>
+  <text class="s-tiny" x="40" y="628" fill="#2dd4bf">CLI already knows your node list, so it writes down who runs what rather than inventing a scheduler.</text>
+</svg>
+</div>
+<figcaption>
+<b>Nothing here is a leader.</b> Three managers run byte-identical reconcile loops. Each one asks the
+same question of the same key and gets the same answer; the only thing that differs is which entries name
+their own node. Remove any two managers and the third still reconciles correctly &mdash; it just has more
+Pods to run, or the DCS is out of quorum and everything is parked.
+</figcaption>
+</figure>
+
+<h4>Why the lease is not optional</h4>
+<p>
+A node-id is written to disk at bootstrap and never changes. If you reimage a host, reinstall, or restore
+a backup, you can end up with a second manager presenting the same node-id. Without a lease, both would
+read the same spec entry, both would start a Pod named <code>ecom-0</code>, and both would mount the same
+directory. That is a corrupt data volume, discovered later. So: acquire
+<code>/pgdbaas/v1/nodes/&lt;id&gt;/lease</code> with a 15-second TTL before doing anything, renew it every
+5 seconds, and exit immediately if you cannot get it. It costs a few lines and it is the difference
+between a fleet and a hazard.
+</p>
+
+<div class="box warn">
+  <span class="tag">What this deliberately gives up</span>
+  <p>
+  There is no automatic rescheduling. If <code>ecom-2</code>'s host dies, the CLI or a human moves it by
+  editing the spec &mdash; you <code>pgdbaas cluster move ecom-2 --to n2</code> and Manager n2 creates it.
+  For three machines and a handful of databases that is the right trade: a human decides where data lives,
+  and the system never surprises you by moving a volume onto a disk that is full.
+  </p>
+</div>
+
+
+<!-- ============================================================ -->
+<h2>03 &nbsp;/&nbsp; Physical topology</h2>
+
+<p>
+Three manager hosts, each carrying one Pod of <code>ecom-db</code> and one etcd member. The application
+host is a fourth machine that is not part of the data path at all &mdash; it only holds the gateway sidecar.
+</p>
+
+<figure>
+<div class="figbox">
+<svg viewBox="0 0 1120 720" role="img" aria-label="Three manager hosts on Cloudflare Mesh each running etcd and one Pod of the ecom-db cluster, plus a separate application host running the app and a gateway sidecar">
+  <defs>
+    <marker id="b1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#38bdf8"/></marker>
+    <marker id="b2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c084fc"/></marker>
+    <marker id="b3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#fbbf24"/></marker>
+  </defs>
+
+  <rect class="s-band" x="16" y="52" width="1088" height="390" rx="14"/>
+  <text class="s-tiny" x="30" y="44" letter-spacing="1.4">CLOUDFLARE MESH  &middot;  LAYER 3  &middot;  100.96.0.0/12  &middot;  MASQUE  &middot;  INNER MTU 1381</text>
+
+  <rect x="30" y="220" width="900" height="150" rx="12" fill="rgba(192,132,252,.05)" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="7 5"/>
+
+  <!-- M1 -->
+  <rect class="s-host" x="40" y="108" width="270" height="230" rx="10"/>
+  <text class="s-title" x="58" y="132">Host n1 &mdash; Manager</text>
+  <text class="s-sub" x="58" y="149">Ubuntu &middot; warp-svc &middot; docker</text>
+  <rect x="56" y="162" width="238" height="50" rx="7" fill="#2a2008" stroke="#fbbf24" stroke-width="1.25"/>
+  <text class="s-mono" x="70" y="184" fill="#fcd34d">etcd  :2379  member 1/3</text>
+  <text class="s-tiny" x="70" y="200">raft peer :2380</text>
+  <rect x="56" y="228" width="238" height="84" rx="7" fill="#1a1430" stroke="#a78bfa" stroke-width="1.5"/>
+  <text class="s-lbl" x="70" y="250" fill="#c4b5fd">Pod ecom-0</text>
+  <text class="s-mono" x="70" y="268">Postgres :21000</text>
+  <text class="s-mono" x="70" y="284">Patroni  :21001</text>
+  <text class="s-tiny" x="70" y="304">replica &middot; nosync &middot; vol pg-ecom-0</text>
+
+  <!-- M2 primary -->
+  <rect class="s-host" x="340" y="108" width="270" height="230" rx="10"/>
+  <text class="s-title" x="358" y="132">Host n2 &mdash; Manager</text>
+  <text class="s-sub" x="358" y="149">Ubuntu &middot; warp-svc &middot; docker</text>
+  <rect x="356" y="162" width="238" height="50" rx="7" fill="#2a2008" stroke="#fbbf24" stroke-width="1.25"/>
+  <text class="s-mono" x="370" y="184" fill="#fcd34d">etcd  :2379  member 2/3</text>
+  <text class="s-tiny" x="370" y="200">raft peer :2380</text>
+  <rect x="356" y="228" width="238" height="84" rx="7" fill="#2a1220" stroke="#fb7185" stroke-width="2"/>
+  <text class="s-lbl" x="370" y="250" fill="#fda4af">Pod ecom-1</text>
+  <rect x="490" y="236" width="86" height="19" rx="9.5" fill="#fb7185"/>
+  <text class="s-tiny" x="533" y="249" text-anchor="middle" fill="#2a0d16" font-weight="700" font-size="9.5">PRIMARY</text>
+  <text class="s-mono" x="370" y="268" fill="#fca5a5">Postgres :21002</text>
+  <text class="s-mono" x="370" y="284" fill="#fca5a5">Patroni  :21003</text>
+  <text class="s-tiny" x="370" y="304">leader lock held in the DCS</text>
+
+  <!-- M3 -->
+  <rect class="s-host" x="640" y="108" width="270" height="230" rx="10"/>
+  <text class="s-title" x="658" y="132">Host n3 &mdash; Manager</text>
+  <text class="s-sub" x="658" y="149">Ubuntu &middot; warp-svc &middot; docker</text>
+  <rect x="656" y="162" width="238" height="50" rx="7" fill="#2a2008" stroke="#fbbf24" stroke-width="1.25"/>
+  <text class="s-mono" x="670" y="184" fill="#fcd34d">etcd  :2379  member 3/3</text>
+  <text class="s-tiny" x="670" y="200">raft peer :2380</text>
+  <rect x="656" y="228" width="238" height="84" rx="7" fill="#1a1430" stroke="#a78bfa" stroke-width="1.5"/>
+  <text class="s-lbl" x="670" y="250" fill="#c4b5fd">Pod ecom-2</text>
+  <text class="s-mono" x="670" y="268">Postgres :21004</text>
+  <text class="s-mono" x="670" y="284">Patroni  :21005</text>
+  <text class="s-tiny" x="670" y="304">replica &middot; sync standby &middot; vol pg-ecom-2</text>
+
+  <!-- raft bus -->
+  <line x1="294" y1="187" x2="354" y2="187" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#b3)"/>
+  <line x1="594" y1="187" x2="654" y2="187" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#b3)"/>
+  <text class="s-tiny" x="324" y="178" text-anchor="middle" fill="#fbbf24">raft</text>
+  <text class="s-tiny" x="624" y="178" text-anchor="middle" fill="#fbbf24">raft</text>
+
+  <!-- WAL bus -->
+  <line x1="175" y1="312" x2="175" y2="352" stroke="#c084fc" stroke-width="1.5"/>
+  <line x1="475" y1="312" x2="475" y2="352" stroke="#c084fc" stroke-width="1.5"/>
+  <line x1="775" y1="312" x2="775" y2="352" stroke="#c084fc" stroke-width="1.5"/>
+  <line x1="175" y1="352" x2="775" y2="352" stroke="#c084fc" stroke-width="1.75"/>
+  <circle cx="475" cy="352" r="5" fill="#fb7185"/>
+  <text class="s-tiny" x="488" y="347" fill="#fda4af">walsender</text>
+
+  <!-- legend -->
+  <line x1="640" y1="392" x2="676" y2="392" stroke="#a78bfa" stroke-width="1.75" stroke-dasharray="6 4"/>
+  <text class="s-tiny" x="686" y="396" fill="#a78bfa">ONE PATRONI CLUSTER &mdash; the outline spans hosts, not machines</text>
+  <line x1="640" y1="412" x2="676" y2="412" stroke="#c084fc" stroke-width="1.75"/>
+  <text class="s-tiny" x="686" y="416" fill="#c084fc">WAL on the reserved range &mdash; Pod to Pod. Not on the gateway path.</text>
+  <line x1="640" y1="432" x2="676" y2="432" stroke="#fbbf24" stroke-width="1.75"/>
+  <text class="s-tiny" x="686" y="436" fill="#fbbf24">DCS :2379 &mdash; raft, quorum 2. Every Pod talks to all three.</text>
+
+  <!-- gateway path -->
+  <path d="M379,528 L379,430 L325,430 L325,268 L354,268" fill="none" stroke="#38bdf8" stroke-width="1.75" stroke-dasharray="6 4" marker-end="url(#b1)"/>
+  <text class="s-tiny" x="392" y="426" fill="#7dd3fc">APPLICATION TRAFFIC &rarr; WHICHEVER POD IS PRIMARY</text>
+
+  <!-- app host -->
+  <rect class="s-host" x="40" y="472" width="470" height="182" rx="10" stroke="#38bdf8"/>
+  <text class="s-title" x="60" y="498" fill="#7dd3fc">Application host &mdash; your own server</text>
+  <text class="s-sub" x="60" y="515">docker compose, no manager, no DCS, no data</text>
+
+  <rect x="60" y="528" width="180" height="84" rx="7" fill="#161b28" stroke="#3b4a63" stroke-width="1.25"/>
+  <text class="s-lbl" x="76" y="552">Medusa</text>
+  <text class="s-tiny" x="76" y="570">your e-commerce app</text>
+  <text class="s-mono" x="76" y="592" fill="#7dd3fc">localhost:5432</text>
+
+  <rect x="268" y="528" width="222" height="84" rx="7" fill="#0d2230" stroke="#38bdf8" stroke-width="1.75"/>
+  <text class="s-lbl" x="284" y="552" fill="#7dd3fc">gateway container</text>
+  <text class="s-mono" x="284" y="570">HAProxy  mode tcp</text>
+  <text class="s-mono" x="284" y="586">binds 127.0.0.1:5432</text>
+  <text class="s-tiny" x="284" y="604">reloads backends, never restarts</text>
+
+  <line x1="244" y1="570" x2="264" y2="570" stroke="#38bdf8" stroke-width="1.75" marker-end="url(#b1)"/>
+
+  <!-- customer -->
+  <rect x="640" y="500" width="230" height="76" rx="10" fill="#0d2b2a" stroke="#2dd4bf" stroke-width="1.25"/>
+  <text class="s-lbl" x="660" y="526" fill="#5eead4">Customer / browser</text>
+  <text class="s-tiny" x="660" y="546">talks to Medusa, never to the database</text>
+  <text class="s-tiny" x="660" y="562">sees no failover, ever</text>
+  <path d="M636,538 L518,538" fill="none" stroke="#2dd4bf" stroke-width="1.75" marker-end="url(#a1)"/>
+
+  <!-- notes -->
+  <text class="s-tiny" x="40" y="682" fill="#a78bfa">&#9650;  the application host can be powered off with zero effect on the cluster. It is a client, not a participant.</text>
+  <text class="s-tiny" x="40" y="700" fill="#38bdf8">&#9650;  the gateway holds no state and holds no Pod. Delete it, restart it, move it &mdash; the cluster does not notice.</text>
+  <text class="s-tiny" x="40" y="716" fill="#fbbf24">&#9650;  etcd members are pinned 1:1 to managers. That coupling is the availability cliff in &sect;10.</text>
+</svg>
+</div>
+<figcaption>
+<b>Read the two paths separately.</b> Violet and amber are the cluster talking to itself. Blue is
+somebody else asking it a question. The application host participates in neither &mdash; it just asks.
+</figcaption>
+</figure>
+
+
+<!-- ============================================================ -->
+<h2>04 &nbsp;/&nbsp; The gateway</h2>
+
+<p>
+You described this well: it sits inside your Medusa compose file, you point your app at it, and it figures
+out the rest. The design question is only <em>how it learns the member list</em>, because everything after
+that is a health check.
+</p>
+
+<p>
+<strong>Nothing about it is decided once.</strong> There is no seed list and no baked-in address. The
+gateway runs a <em>resync loop</em> forever: every 30 seconds it asks the managers for the current member
+list, diffs it against what it has, and reloads if anything changed. Between resyncs it is kept correct by
+health checks alone.
+</p>
+<p>
+The important consequence: a failed resync is harmless. If every manager is unreachable, the gateway keeps
+routing correctly from what it last learned, because the health checks never needed a manager in the first
+place. It only means the gateway will not discover Pods that appear <em>after</em> it lost the managers.
+</p>
+
+<figure>
+<div class="figbox">
+<svg viewBox="0 0 1120 500" role="img" aria-label="Gateway sidecar resyncs its member list from the managers on a loop, health checks each Pod, and repoints on failover without restarting">
+  <defs>
+    <marker id="g1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#38bdf8"/></marker>
+    <marker id="g2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#fbbf24"/></marker>
+  </defs>
+
+  <!-- app -->
+  <rect x="30" y="150" width="200" height="96" rx="9" fill="#161b28" stroke="#3b4a63" stroke-width="1.25"/>
+  <text class="s-lbl" x="48" y="176">Medusa</text>
+  <text class="s-mono" x="48" y="198" fill="#7dd3fc">localhost:5432</text>
+  <text class="s-tiny" x="48" y="220">opens and holds a TCP connection</text>
+  <text class="s-tiny" x="48" y="234">for as long as it lives</text>
+
+  <!-- gateway -->
+  <rect x="286" y="40" width="330" height="300" rx="11" fill="#0d2230" stroke="#38bdf8" stroke-width="1.75"/>
+  <text class="s-title" x="308" y="66" fill="#7dd3fc">gateway container</text>
+
+  <rect x="306" y="80" width="290" height="66" rx="7" fill="#0b1a24" stroke="#2a6a8a" stroke-width="1"/>
+  <text class="s-lbl" x="322" y="102">1 &middot; resync loop, every 30s</text>
+  <text class="s-tiny" x="322" y="120">ask the managers for the member list,</text>
+  <text class="s-tiny" x="322" y="134">diff, reload. No seed, no baked addresses.</text>
+
+  <rect x="306" y="158" width="290" height="66" rx="7" fill="#0b1a24" stroke="#2a6a8a" stroke-width="1"/>
+  <text class="s-lbl" x="322" y="180">2 &middot; health check every 2s</text>
+  <text class="s-tiny" x="322" y="198">GET http://&lt;pod&gt;:21001/primary, every time</text>
+  <text class="s-tiny" x="322" y="212">HTTP 200 only for the real primary</text>
+
+  <rect x="306" y="236" width="290" height="66" rx="7" fill="#0b1a24" stroke="#2a6a8a" stroke-width="1"/>
+  <text class="s-lbl" x="322" y="258">3 &middot; keep one live backend</text>
+  <text class="s-tiny" x="322" y="276">on-marked-down shutdown-sessions</text>
+  <text class="s-tiny" x="322" y="290">new connections go to the new primary</text>
+
+  <rect x="306" y="310" width="290" height="18" rx="4" fill="#0b1a24" stroke="#2a6a8a" stroke-width="1"/>
+  <text class="s-tiny" x="322" y="323" fill="#7dd3fc">a failed resync is harmless &mdash; keep serving</text>
+
+  <line x1="234" y1="198" x2="282" y2="198" stroke="#38bdf8" stroke-width="1.75" marker-end="url(#g1)"/>
+
+  <!-- members -->
+  <rect x="700" y="70" width="180" height="72" rx="8" fill="#1a1430" stroke="#a78bfa" stroke-width="1.25"/>
+  <text class="s-lbl" x="716" y="94" fill="#c4b5fd">ecom-0</text>
+  <text class="s-mono" x="716" y="112">pg :21000  api :21001</text>
+  <text class="s-tiny" x="716" y="130">replica</text>
+
+  <rect x="700" y="160" width="180" height="72" rx="8" fill="#2a1220" stroke="#fb7185" stroke-width="2"/>
+  <text class="s-lbl" x="716" y="184" fill="#fda4af">ecom-1</text>
+  <text class="s-mono" x="716" y="202" fill="#fca5a5">pg :21002  api :21003</text>
+  <text class="s-tiny" x="716" y="220">PRIMARY &rarr; 200</text>
+
+  <rect x="700" y="250" width="180" height="72" rx="8" fill="#1a1430" stroke="#a78bfa" stroke-width="1.25"/>
+  <text class="s-lbl" x="716" y="274" fill="#c4b5fd">ecom-2</text>
+  <text class="s-mono" x="716" y="292">pg :21004  api :21005</text>
+  <text class="s-tiny" x="716" y="310">replica</text>
+
+  <line x1="620" y1="180" x2="696" y2="106" stroke="#fbbf24" stroke-width="1.25" stroke-dasharray="4 3" marker-end="url(#g2)"/>
+  <line x1="620" y1="200" x2="696" y2="196" stroke="#fbbf24" stroke-width="1.25" stroke-dasharray="4 3" marker-end="url(#g2)"/>
+  <line x1="620" y1="220" x2="696" y2="286" stroke="#fbbf24" stroke-width="1.25" stroke-dasharray="4 3" marker-end="url(#g2)"/>
+
+  <text class="s-tiny" x="940" y="200" fill="#fbbf24">over the mesh</text>
+
+  <!-- failover timeline -->
+  <rect x="30" y="380" width="1060" height="110" rx="9" fill="#10141f" stroke="#2f3a52" stroke-width="1"/>
+  <text class="s-tiny" x="52" y="404" fill="#fb7185">FAILOVER, AS SEEN BY THE GATEWAY</text>
+  <text class="s-tiny" x="52" y="426">t=0s   ecom-1 is primary, gateway backend is ecom-1, app connection is open</text>
+  <text class="s-tiny" x="52" y="444">t=0s   ecom-1's host dies. The app's TCP connection breaks. The app is told nothing.</text>
+  <text class="s-tiny" x="52" y="462">t~30s  leader lock TTL expires, Patroni elects ecom-2, it starts answering 200 on :21005</text>
+  <text class="s-tiny" x="52" y="480" fill="#34d399">t~32s  gateway marks ecom-1 down and marks ecom-2 up. Next connection from the app lands on ecom-2. Done.</text>
+</svg>
+</div>
+<figcaption>
+<b>Two things to be clear about.</b> First, the gateway does not participate in failover — Patroni
+already did the work; the gateway just notices. Second, an
+<em>already-open</em> connection is never migrated. Your app sees a dropped connection, its pool
+reconnects to <code>localhost:5432</code>, and the new connection lands wherever the primary is now. That
+is why connection-pool settings in your app matter more than anything the gateway does.
+</figcaption>
+</figure>
+
+<h4>Wiring it into your compose file</h4>
+<pre><code># docker-compose.yml, alongside medusa
+services:
+  db-gateway:
+    image: ghcr.io/you/pgdbaas-gateway:latest
+    environment:
+      DB_CLUSTER: ecom-db
+      # The only thing configured. Everything else - members, ports,
+      # roles - is resynced from the managers every 30 seconds.
+      DB_MANAGERS: "100.96.0.11:7000,100.96.0.12:7000,100.96.0.13:7000"
+      DB_RESYNC_SECONDS: "30"
+    ports:
+      - "127.0.0.1:5432:5432"     # loopback only. never 0.0.0.0.
+    restart: unless-stopped
+
+  medusa:
+    environment:
+      DATABASE_URL: postgres://ecom:***@127.0.0.1:5432/ecom
+    depends_on: [db-gateway]</code></pre>
+
+<div class="box ok">
+  <span class="tag">The only configuration is which cluster, and where the managers are</span>
+  <p>
+  Member addresses, ports, roles &mdash; all of that comes from the DCS on a loop. Move a Pod to a
+  different host or a different port and the gateway picks it up within 30 seconds without you editing
+  anything. That is the difference between a config file that is true on the day you write it and a
+  config file that is quietly wrong by next month.
+  </p>
+</div>
+
+<div class="box ok">
+  <span class="tag">Bind it to loopback, not 0.0.0.0</span>
+  <p>
+  The gateway's port is on the application host, not the mesh. Publishing <code>0.0.0.0:5432</code>
+  would put your database on the public internet behind nothing but a database password. Keep it on
+  <code>127.0.0.1</code> and let the mesh be the only way in.
+  </p>
+</div>
+
+
+<!-- ============================================================ -->
+<h2>05 &nbsp;/&nbsp; Networking: why host mode solves it</h2>
+
+<p>
+The MTU problem I flagged in the first draft was real, and your instinct to reach for a different
+container runtime was the right instinct for the wrong reason. <strong>Switching to Podman would not have
+fixed it.</strong> The problem is not the runtime. It is that a container on a private bridge network has
+an MTU the overlay path cannot carry, and every container runtime inherits that.
+</p>
+
+<p>
+The actual fix is to not have a bridge. With <code>--network host</code> the container is in the host's
+network namespace: no veth pair, no <code>docker0</code>, no DNAT, no masquerade. It binds the host's
+addresses directly, including the Mesh address Cloudflare already sized correctly.
+</p>
+
+<figure>
+<div class="figbox">
+<svg viewBox="0 0 1120 430" role="img" aria-label="Comparison of bridge networking with an MTU mismatch versus host networking where the MTU mismatch does not exist">
+  <defs>
+    <marker id="n1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5f6a7d"/></marker>
+    <marker id="n2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#34d399"/></marker>
+  </defs>
+
+  <!-- LEFT: bridge -->
+  <rect x="24" y="20" width="524" height="330" rx="12" fill="#14101a" stroke="#4a3050" stroke-width="1.5"/>
+  <text class="s-title" x="46" y="48" fill="#f0abfc">Bridge networking &mdash; the default</text>
+  <text class="s-tiny" x="46" y="68" fill="#c084fc">container eth0 : MTU 1500</text>
+
+  <rect x="46" y="88" width="480" height="42" rx="7" fill="#1a1430" stroke="#a78bfa" stroke-width="1.25"/>
+  <text class="s-mono" x="62" y="114" fill="#c4b5fd">Pod container &mdash; advertises MSS 1460</text>
+  <line x1="286" y1="130" x2="286" y2="152" stroke="#5f6a7d" stroke-width="1.75" marker-end="url(#n1)"/>
+  <text class="s-tiny" x="300" y="146">veth pair &mdash; MTU 1500</text>
+
+  <rect x="46" y="156" width="480" height="42" rx="7" fill="#161b28" stroke="#3b4a63" stroke-width="1.25"/>
+  <text class="s-mono" x="62" y="182">docker0 bridge &mdash; MTU 1500</text>
+  <line x1="286" y1="198" x2="286" y2="220" stroke="#5f6a7d" stroke-width="1.75" marker-end="url(#n1)"/>
+  <text class="s-tiny" x="300" y="214">DNAT + MASQUERADE</text>
+
+  <rect x="46" y="224" width="480" height="42" rx="7" fill="#161b28" stroke="#3b4a63" stroke-width="1.25"/>
+  <text class="s-mono" x="62" y="250">host routing</text>
+  <line x1="286" y1="266" x2="286" y2="288" stroke="#5f6a7d" stroke-width="1.75" marker-end="url(#n1)"/>
+
+  <rect x="46" y="292" width="480" height="42" rx="7" fill="#2a1220" stroke="#fb7185" stroke-width="2"/>
+  <text class="s-mono" x="62" y="318" fill="#fca5a5">Mesh interface &mdash; MTU 1381</text>
+
+  <text class="s-tiny" x="46" y="342" fill="#fb7185">1460 + 28 = 1488 &gt; 1381. Oversized segments are dropped, not fragmented.</text>
+
+  <!-- RIGHT: host -->
+  <rect x="572" y="20" width="524" height="330" rx="12" fill="#0c1614" stroke="#2a5a48" stroke-width="1.5"/>
+  <text class="s-title" x="594" y="48" fill="#6ee7b7">Host networking &mdash; --network host</text>
+  <text class="s-tiny" x="594" y="68" fill="#34d399">no veth, no bridge, no DNAT</text>
+
+  <rect x="594" y="88" width="480" height="42" rx="7" fill="#0d2b26" stroke="#34d399" stroke-width="1.5"/>
+  <text class="s-mono" x="610" y="114" fill="#a7f3d0">Pod container &mdash; in the host netns</text>
+
+  <line x1="834" y1="130" x2="834" y2="166" stroke="#34d399" stroke-width="1.75" marker-end="url(#n2)"/>
+  <text class="s-tiny" x="848" y="152" fill="#34d399">no translation step at all</text>
+
+  <rect x="594" y="170" width="480" height="42" rx="7" fill="#0d2b26" stroke="#34d399" stroke-width="1.25"/>
+  <text class="s-mono" x="610" y="196" fill="#a7f3d0">binds 100.96.0.12:21002 directly</text>
+
+  <line x1="834" y1="212" x2="834" y2="248" stroke="#34d399" stroke-width="1.75" marker-end="url(#n2)"/>
+  <text class="s-tiny" x="848" y="234" fill="#34d399">replication goes straight out</text>
+
+  <rect x="594" y="252" width="480" height="42" rx="7" fill="#0d2b26" stroke="#34d399" stroke-width="1.5"/>
+  <text class="s-mono" x="610" y="278" fill="#a7f3d0">Mesh interface &mdash; MTU 1381</text>
+
+  <text class="s-tiny" x="594" y="320" fill="#34d399">The container's MTU <tspan font-weight="700">is</tspan> the overlay MTU. The class of bug is gone.</text>
+  <text class="s-tiny" x="594" y="340" fill="#8b95a8">Encapsulated outer packet = 1381 + 80 = 1461, which fits a 1500 NIC.</text>
+
+  <!-- notes -->
+  <text class="s-tiny" x="24" y="378">&#9650;  Cloudflare states the Mesh MTU as 1381 and separately notes that Docker does not adjust for WARP automatically. In host mode there is nothing to adjust.</text>
+  <text class="s-tiny" x="24" y="398" fill="#fb7185">&#9650;  the cost: host mode discards port isolation. Two Pods on one host collide on a port, so every Pod needs a deterministic port offset. See &sect;07.</text>
+  <text class="s-tiny" x="24" y="418" fill="#5f6a7d">&#9650;  host mode also gives up embedded DNS (no 127.0.0.11) and makes every host-networked Pod able to reach the host's loopback. Acceptable for a fleet you own.</text>
+</svg>
+</div>
+<figcaption>
+<b>This is why the answer was never "use a different runtime."</b> The MTU mismatch is a property of the
+bridge, not of Docker. And note the second card: in host mode the Pod binds
+<code>100.96.0.12:21002</code> itself, so replication is a direct peer-to-peer connection with the real
+mesh source address intact &mdash; which is what makes <code>pg_hba.conf</code> and your logs meaningful.
+</figcaption>
+</figure>
+
+<div class="box ok">
+  <span class="tag">What host networking does not break</span>
+  <p>
+  The container still gets its own mount, PID, UTS, IPC and cgroup namespaces, its own root filesystem, and
+  the default seccomp profile. It cannot see host processes or read host files it was not given. You are
+  giving up one namespace, not six. Write <code>network_mode: host</code> out explicitly in the compose
+  file so a reviewer can see exactly what was traded.
+  </p>
+</div>
+
+<h4>What this costs you, and how it is contained</h4>
+<p>
+Host networking means rootful Docker, which means the daemon needs root. Your instinct to avoid a root
+login was reasonable, so here is how the root is contained without you editing anything by hand.
+</p>
+<p>
+The bootstrap script &mdash; the one you copy to each machine and run once, described in &sect;10 &mdash;
+does all of it: it runs as root for a minute, and it leaves behind a control machine that is not root and
+has no shell.
+</p>
+
+<pre><code># Written by pgdbaas-node.sh. You never type this.
+restrict,command="/usr/local/bin/pgdbaas-remote" ssh-ed25519 AAAA... pgdbaas-control
+
+# The control machine can only say:
+#   "enroll this host as node n2 and start the manager."
+# It cannot open a shell, cannot forward ports, cannot become root.
+# The script prints this line when it writes it, so you can see it happened.</code></pre>
+
+<p>
+So the sequence is: you read a short script, run it once as root on each host, and from then on the
+control machine is confined to a single fixed command on each box. That is a narrower control surface than
+a root shell, and the only thing you had to do was run one file.
+</p>
+
+
+<!-- ============================================================ -->
+<h2>06 &nbsp;/&nbsp; The proxy chain, hop by hop</h2>
+
+<p>
+One <code>INSERT</code> from your app, tracing every layer. In host mode there is one fewer hop than the
+first draft had: there is no manager port-forward, because the Pod binds the host's Mesh address directly.
+</p>
+
+<figure>
+<div class="figbox">
+<svg viewBox="0 0 1000 800" role="img" aria-label="Hop by hop path of a client write from the app through the local gateway, across Cloudflare Mesh, to the primary Postgres, plus the Patroni health check control path">
+  <defs>
+    <marker id="p1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7dd3fc"/></marker>
+    <marker id="p2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#fbbf24"/></marker>
+    <marker id="p3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c4b5fd"/></marker>
+  </defs>
+
+  <rect x="100" y="20" width="580" height="58" rx="9" fill="#161b28" stroke="#3b4a63" stroke-width="1.5"/>
+  <circle class="hopnum" cx="66" cy="49" r="15" stroke="#38bdf8"/><text class="hops" x="66" y="54" text-anchor="middle" font-size="14" font-weight="700" font-family="var(--mono)">1</text>
+  <text class="s-title" x="130" y="44">Medusa &mdash; your app, on the application host</text>
+  <text class="s-mono" x="130" y="64">postgres://ecom:***@127.0.0.1:5432/ecom  (loopback, never leaves the machine)</text>
+
+  <rect x="100" y="94" width="580" height="58" rx="9" fill="#0d2230" stroke="#38bdf8" stroke-width="1.5"/>
+  <circle class="hopnum" cx="66" cy="123" r="15" stroke="#38bdf8"/><text class="hops" x="66" y="128" text-anchor="middle" font-size="14" font-weight="700" font-family="var(--mono)">2</text>
+  <text class="s-title" x="130" y="118" fill="#7dd3fc">Gateway &mdash; HAProxy, mode tcp, backend pool = all Pods</text>
+  <text class="s-mono" x="130" y="138">no state &middot; on-marked-down shutdown-sessions &middot; rebuilt from scratch on restart</text>
+
+  <rect x="100" y="168" width="580" height="66" rx="9" fill="#2a2008" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <circle cx="66" cy="201" r="15" fill="#0b0e14" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="3 2"/>
+  <text x="66" y="206" text-anchor="middle" font-size="14" font-weight="700" font-family="var(--mono)" fill="#fcd34d">3</text>
+  <text class="s-title" x="130" y="192" fill="#fcd34d">CONTROL &mdash; gateway health check</text>
+  <text class="s-mono" x="130" y="212">GET http://&lt;pod&gt;:21001/primary  &middot;  inter 2s fall 3 rise 2</text>
+  <text class="s-mono" x="130" y="228" fill="#fbbf24">HTTP 200 only if running as primary AND holding the leader lock</text>
+
+  <rect x="100" y="250" width="580" height="58" rx="9" fill="#0d2b2a" stroke="#2dd4bf" stroke-width="1.5"/>
+  <circle class="hopnum" cx="66" cy="279" r="15" stroke="#2dd4bf"/><text class="hops" x="66" y="284" text-anchor="middle" font-size="14" font-weight="700" font-family="var(--mono)">4</text>
+  <text class="s-title" x="130" y="274">Cloudflare Mesh &mdash; encrypted, Layer 3</text>
+  <text class="s-mono" x="130" y="294">MASQUE to the edge, then peer to peer &middot; inner MTU 1381 &middot; the only hop off-host</text>
+
+  <rect x="100" y="324" width="580" height="58" rx="9" fill="#0d2230" stroke="#38bdf8" stroke-width="1.5"/>
+  <circle class="hopnum" cx="66" cy="353" r="15" stroke="#38bdf8"/><text class="hops" x="66" y="358" text-anchor="middle" font-size="14" font-weight="700" font-family="var(--mono)">5</text>
+  <text class="s-title" x="130" y="348" fill="#7dd3fc">Host n2 &mdash; the Pod is IN this network namespace</text>
+  <text class="s-mono" x="130" y="368">no veth, no DNAT, no NAT &mdash; the Pod bound 100.96.0.12:21002 itself</text>
+
+  <rect x="100" y="398" width="580" height="58" rx="9" fill="#1a1430" stroke="#a78bfa" stroke-width="1.5"/>
+  <circle class="hopnum" cx="66" cy="427" r="15" stroke="#a78bfa"/><text class="hops" x="66" y="432" text-anchor="middle" font-size="14" font-weight="700" font-family="var(--mono)">6</text>
+  <text class="s-title" x="130" y="422" fill="#c4b5fd">Pod ecom-1 &mdash; Patroni supervises PostgreSQL</text>
+  <text class="s-mono" x="130" y="442">the write is committed, then the leader lock is refreshed in etcd next loop</text>
+
+  <rect x="100" y="472" width="580" height="46" rx="9" fill="#0d2b2a" stroke="#2dd4bf" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <circle class="hopnum" cx="66" cy="495" r="15" stroke="#2dd4bf"/><text class="hops" x="66" y="500" text-anchor="middle" font-size="14" font-weight="700" font-family="var(--mono)">7</text>
+  <text class="s-title" x="130" y="500">Response unwinds 6 &rarr; 1. Nothing above the Pod is stateful.</text>
+
+  <line x1="66" y1="78" x2="66" y2="92" stroke="#7dd3fc" stroke-width="1.75" marker-end="url(#p1)"/>
+  <line x1="66" y1="152" x2="66" y2="166" stroke="#fbbf24" stroke-width="1.75" stroke-dasharray="4 3" marker-end="url(#p2)"/>
+  <path d="M66,234 L66,248 L430,248 L430,252" fill="none" stroke="#7dd3fc" stroke-width="1.75" marker-end="url(#p1)"/>
+  <line x1="66" y1="308" x2="66" y2="322" stroke="#7dd3fc" stroke-width="1.75" marker-end="url(#p1)"/>
+  <line x1="66" y1="382" x2="66" y2="396" stroke="#c4b5fd" stroke-width="1.75" marker-end="url(#p3)"/>
+  <line x1="66" y1="456" x2="66" y2="470" stroke="#7dd3fc" stroke-width="1.75" marker-end="url(#p1)"/>
+
+  <text class="s-tiny" x="990" y="120" text-anchor="end">the app has no idea which</text>
+  <text class="s-tiny" x="990" y="136" text-anchor="end">host holds the primary</text>
+  <text class="s-tiny" x="990" y="272" text-anchor="end">the only hop a relay can</text>
+  <text class="s-tiny" x="990" y="288" text-anchor="end">interrupt or slow down</text>
+  <text class="s-tiny" x="990" y="346" text-anchor="end">one proxy hop in the whole</text>
+  <text class="s-tiny" x="990" y="362" text-anchor="end">application data path</text>
+
+  <rect x="100" y="546" width="580" height="106" rx="9" fill="#10141f" stroke="#2f3a52" stroke-width="1"/>
+  <text class="s-lbl" x="126" y="572">What is stateful in this path: the Pod, and nothing else.</text>
+  <text class="s-mono" x="126" y="594">gateway = a health-check cache, rebuilt from scratch on restart</text>
+  <text class="s-mono" x="126" y="612">manager = a reconcile loop reading the DCS, stateless between passes</text>
+  <text class="s-mono" x="126" y="630">control machine = not present, not needed, deletable</text>
+  <text class="s-tiny" x="126" y="646">Read port and write port differ (:21001 vs :21000). That is why the leader race works.</text>
+</svg>
+</div>
+<figcaption>
+<b>One proxy hop, one control probe.</b> The control probe at hop 3 is the whole "the gateway knows who
+the primary is" requirement, and it is a dozen lines of HAProxy config rather than custom code.
+</figcaption>
+</figure>
+
+
+<!-- ============================================================ -->
+<h2>07 &nbsp;/&nbsp; The replication path and the port budget</h2>
+
+<p>
+Replication is Pod-to-Pod, peer to peer, and it never touches the gateway or any manager. In host mode it
+is a direct connection from one host's Mesh address to another's, with the real source IP intact.
+</p>
+
+<figure>
+<div class="figbox">
+<svg viewBox="0 0 1000 340" role="img" aria-label="Replication flows directly between pods over the mesh, and every pod also talks to all three etcd members">
+  <defs>
+    <marker id="r1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c084fc"/></marker>
+    <marker id="r2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#fbbf24"/></marker>
+  </defs>
+
+  <rect x="16" y="52" width="968" height="216" rx="14" fill="#0e1320" stroke="#28324a" stroke-width="1" stroke-dasharray="5 5"/>
+  <text class="s-tiny" x="32" y="44" letter-spacing="1.4">OVERLAY  &middot;  100.96.0.0/12</text>
+
+  <rect x="330" y="76" width="230" height="126" rx="10" fill="#2a1220" stroke="#fb7185" stroke-width="2"/>
+  <text class="s-title" x="350" y="100" fill="#fda4af">Pod ecom-1</text>
+  <rect x="466" y="84" width="80" height="19" rx="9.5" fill="#fb7185"/>
+  <text class="s-tiny" x="506" y="97" text-anchor="middle" fill="#2a0d16" font-weight="700" font-size="9.5">PRIMARY</text>
+  <text class="s-mono" x="350" y="124" fill="#fca5a5">100.96.0.12:21002</text>
+  <text class="s-tiny" x="350" y="146" fill="#fca5a5">walsender dials each replica's</text>
+  <text class="s-tiny" x="350" y="160" fill="#fca5a5">connect_address, in order</text>
+
+  <rect x="700" y="76" width="230" height="126" rx="10" fill="#1a1430" stroke="#a78bfa" stroke-width="1.5"/>
+  <text class="s-title" x="720" y="100" fill="#c4b5fd">Pod ecom-2</text>
+  <text class="s-mono" x="720" y="124">100.96.0.13:21004</text>
+  <text class="s-tiny" x="720" y="146">walreceiver, accepts inbound on</text>
+  <text class="s-tiny" x="720" y="160">the same port clients use</text>
+
+  <line x1="560" y1="118" x2="696" y2="118" stroke="#c084fc" stroke-width="2.25" marker-end="url(#r1)"/>
+  <text class="s-tiny" x="628" y="110" text-anchor="middle" fill="#c084fc">WAL</text>
+  <line x1="696" y1="166" x2="560" y2="166" stroke="#7c5c9e" stroke-width="1.25" stroke-dasharray="4 3" marker-end="url(#r1)"/>
+  <text class="s-tiny" x="628" y="184" text-anchor="middle" fill="#a78bfa">lag, xlog</text>
+
+  <rect x="330" y="222" width="600" height="40" rx="8" fill="#2a2008" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text class="s-mono" x="630" y="239" text-anchor="middle" fill="#fcd34d">EVERY POD ALSO TALKS TO ALL 3 etcd MEMBERS  :2379</text>
+  <text class="s-tiny" x="630" y="254" text-anchor="middle" fill="#fbbf24">leader lock, cluster config, member list, /failsafe topology</text>
+  <line x1="445" y1="202" x2="445" y2="220" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="3 3" marker-end="url(#r2)"/>
+  <line x1="815" y1="202" x2="815" y2="220" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="3 3" marker-end="url(#r2)"/>
+
+  <text class="s-tiny" x="32" y="296" fill="#c084fc">&#9650;  in host mode the source address is the real Mesh IP, so pg_hba.conf can be written against actual hosts instead of a NAT address.</text>
+  <text class="s-tiny" x="32" y="316" fill="#fb7185">&#9650;  keep this path boring. One hop, direct, no translation.</text>
+  <text class="s-tiny" x="32" y="336" fill="#fbbf24">&#9650;  a gateway outage costs a connection pool, not availability.</text>
+</svg>
+</div>
+<figcaption>
+<b>Keep this path boring.</b> One hop, direct, no translation. Every design decision in the runtime section
+exists to protect this arrow.
+</figcaption>
+</figure>
+
+<h4>Ports: a reserved range, not a proxy</h4>
+<p>
+Host networking means every port a Pod binds <em>is</em> a port on the host, so two Pods cannot share
+one. The requirement is: never hardcode a port, always know which ones are free, and be able to change
+the scheme later without redesigning anything.
+</p>
+<p>
+<strong>Reserve a range.</strong> Pick a block nothing standard uses &mdash; <code>21000-21999</code> &mdash;
+verify it at bootstrap, and record the base in the DCS. Pod <em>k</em> takes two ports from it: one for
+PostgreSQL, one for the Patroni REST API. There is no proxy and no port demultiplexer, so replication
+stays a single direct hop and the source address survives.
+</p>
+
+<table class="tbl">
+  <thead><tr><th>Port</th><th>What</th><th>Who talks to it</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td>21000-21999</td><td>the reserved range</td><td>Pod data and REST ports only</td><td>Verified free at bootstrap, base recorded in the DCS. Changeable later.</td></tr>
+    <tr><td>base + 2k</td><td>PostgreSQL, Pod <em>k</em></td><td>other Pods (replication), gateways</td><td>Same port for both. Split by who you trust, not by socket.</td></tr>
+    <tr><td>base + 2k + 1</td><td>Patroni REST, Pod <em>k</em></td><td>other Pods, every gateway</td><td><span style="color:#fb7185;font-weight:600">not optional</span> &mdash; the leader race calls it on every member</td></tr>
+    <tr><td>2379 / 2380</td><td>etcd client / peer</td><td>every Patroni in every cluster</td><td>One per <em>host</em>, not per Pod. The quorum member.</td></tr>
+    <tr><td>7000</td><td>Manager control API</td><td>the CLI, the gateway's resync loop</td><td>Read-mostly. The DCS is the write path.</td></tr>
+    <tr><td>5432</td><td>Gateway, on the app host</td><td>the app, over loopback</td><td>Bind to <code>127.0.0.1</code>. Never on the mesh.</td></tr>
+  </tbody>
+</table>
+
+<p>
+Two ports per Pod, not one. The REST port is the one that bites: Patroni's leader race calls
+<code>restapi.connect_address</code> on every other member. Omit it from the overlay and the cluster elects
+fine right up until the moment it needs to elect &mdash; and then it elects wrong, or hangs, under exactly
+the conditions you built it for.
+</p>
+
+<div class="box ok">
+  <span class="tag">Why a reserved range beat the fixed proxy window</span>
+  <p>
+  A fixed-size window behind a manager-side demultiplexer sounds tidier &mdash; a small, enumerable port
+  surface, immune to whatever else is on the host. It costs you two extra local TCP hops on every
+  replication link, <strong>and it rewrites the source address</strong>, so <code>pg_hba.conf</code> could
+  no longer name a host and your PostgreSQL logs could no longer tell you which machine connected. It also
+  imposes a hard ceiling of Pods per host.
+  </p>
+  <p style="margin-top:12px">
+  Reserving a range costs none of that. The surface is still fully enumerable &mdash; it is printed by
+  <code>pgdbaas status</code> and stored in the DCS &mdash; and moving to a different range later is one
+  value, not a redesign. In a three-host setup the window's main advantage was never worth those costs.
+  </p>
+</div>
+
+<div class="box warn">
+  <span class="tag">The one real cost, and how it shows up</span>
+  <p>
+  A service you did not control can grab a port in the range after bootstrap. Re-checking the specific
+  pair before every Pod create turns that from a mystery into an error message naming the port. That is
+  the whole failure mode.
+  </p>
+</div>
+
+
+<!-- ============================================================ -->
+<h2>08 &nbsp;/&nbsp; Leadership, demotion, and split brain</h2>
+
+<p>
+This is the mechanism that stops two Pods writing at once. It is the least intuitive part of the system,
+so here is all of it without jargon first.
+</p>
+
+<h3>The problem</h3>
+<p>
+Patroni keeps a <strong>leader lock</strong> in the DCS: the key <code>/service/ecom-db/leader</code>
+holds the name of the current primary, with a 30-second expiry. The primary renews it every ten seconds or
+so.
+</p>
+<p>
+Now imagine the network between your hosts breaks. The primary can no longer reach the DCS, nor the other
+two Pods. From where it sits, it cannot tell the difference between:
+</p>
+<ul>
+  <li><strong>"the shared store is down"</strong> &mdash; in which case it is probably still alone, and
+      probably fine; and</li>
+  <li><strong>"I have been cut off from everyone"</strong> &mdash; in which case the other two Pods may
+      already have promoted a <em>different</em> primary, and both halves now believe they are the
+      writer.</li>
+</ul>
+<p>
+That second state is <strong>split brain</strong>: two Pods both writing to the same dataset. It corrupts
+the data, and afterwards you cannot determine which of the two was right. Both are confidently wrong and
+neither can prove it.
+</p>
+
+<h3>The answer</h3>
+<p>
+When the primary cannot renew its lock, it <strong>demotes itself</strong>: it stops accepting writes and
+goes read-only. The heading says <em>"demotion, not a partition heal"</em> because Patroni does not attempt
+to repair the broken network. It cannot, from one side of a partition. It just refuses to be the writer
+without proof, and lets the other half sort itself out &mdash; where a healthy quorum will already have
+elected a replacement, and the demoted node will come back and rejoin as a replica.
+</p>
+
+<div class="box ok">
+  <span class="tag">This is a trade, and the trade is deliberate</span>
+  <p>
+  <strong>Availability traded for safety.</strong> A flaky network gives you an <em>outage</em> instead of
+  <em>data loss</em>. The cluster goes read-only for up to thirty seconds, then either recovers on its own
+  or a human forces a promotion knowing exactly what might be lost. The DCS exists for precisely this one
+  reason: to make the decision possible.
+  </p>
+</div>
+
+<figure>
+<div class="figbox">
+<svg viewBox="0 0 1000 400" role="img" aria-label="Patroni members query each other over the REST API and race for the leader lock in etcd">
+  <defs>
+    <marker id="l1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#fbbf24"/></marker>
+  </defs>
+
+  <rect x="330" y="130" width="340" height="150" rx="12" fill="#2a2008" stroke="#fbbf24" stroke-width="1.75"/>
+  <text class="s-title" x="500" y="158" text-anchor="middle" fill="#fcd34d">etcd &mdash; DCS</text>
+  <text class="s-mono" x="500" y="178" text-anchor="middle" fill="#fbbf24">3 members &middot; raft &middot; quorum 2</text>
+  <line x1="368" y1="192" x2="632" y2="192" stroke="#fbbf24" stroke-width="1.25"/>
+  <text class="s-mono" x="500" y="212" text-anchor="middle" fill="#fcd34d">/service/ecom-db/leader</text>
+  <text class="s-tiny" x="500" y="230" text-anchor="middle" fill="#fbbf24">CAS, TTL 30s, renewed each loop_wait</text>
+  <text class="s-tiny" x="500" y="248" text-anchor="middle" fill="#fbbf24">/config &middot; /members/* &middot; /history &middot; /failsafe</text>
+  <text class="s-tiny" x="500" y="266" text-anchor="middle" fill="#a1a1aa">one store serves every cluster, namespaced by scope</text>
+
+  <rect x="40" y="50" width="200" height="70" rx="9" fill="#1a1430" stroke="#a78bfa" stroke-width="1.5"/>
+  <text class="s-lbl" x="58" y="74" fill="#c4b5fd">Pod ecom-0</text>
+  <text class="s-mono" x="58" y="94">Patroni :21001</text>
+  <text class="s-tiny" x="58" y="110">replica</text>
+
+  <rect x="40" y="290" width="200" height="70" rx="9" fill="#2a1220" stroke="#fb7185" stroke-width="2"/>
+  <text class="s-lbl" x="58" y="314" fill="#fda4af">Pod ecom-1</text>
+  <rect x="148" y="298" width="78" height="19" rx="9.5" fill="#fb7185"/>
+  <text class="s-tiny" x="187" y="311" text-anchor="middle" fill="#2a0d16" font-weight="700" font-size="9.5">PRIMARY</text>
+  <text class="s-mono" x="58" y="334" fill="#fca5a5">Patroni :21003</text>
+  <text class="s-tiny" x="58" y="350" fill="#fca5a5">refreshes the lock each loop</text>
+
+  <rect x="760" y="170" width="200" height="70" rx="9" fill="#1a1430" stroke="#a78bfa" stroke-width="1.5"/>
+  <text class="s-lbl" x="778" y="194" fill="#c4b5fd">Pod ecom-2</text>
+  <text class="s-mono" x="778" y="214">Patroni :21005</text>
+  <text class="s-tiny" x="778" y="230">replica</text>
+
+  <line x1="240" y1="80" x2="330" y2="170" stroke="#fbbf24" stroke-width="1.75" marker-end="url(#l1)"/>
+  <line x1="240" y1="330" x2="330" y2="240" stroke="#fbbf24" stroke-width="1.75" marker-end="url(#l1)"/>
+  <line x1="760" y1="205" x2="670" y2="205" stroke="#fbbf24" stroke-width="1.75" marker-end="url(#l1)"/>
+
+  <path d="M240,70 L500,70 L500,128" fill="none" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#l1)"/>
+  <path d="M240,352 L500,352 L500,282" fill="none" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#l1)"/>
+  <text class="s-tiny" x="505" y="62" fill="#c4b5fd">GET /patroni &mdash; liveness, xlog position, timeline</text>
+
+  <rect x="40" y="374" width="920" height="20" rx="4" fill="#10141f" stroke="#2f3a52" stroke-width="1"/>
+  <text class="s-mono" x="58" y="388">loop_wait 10s &middot; retry_timeout 10s &middot; ttl 30s   &mdash;   loop_wait + 2 &times; retry_timeout &le; ttl</text>
+</svg>
+</div>
+<figcaption>
+<b>The invariant on that last line is load-bearing.</b> Change <code>ttl</code> and
+<code>retry_timeout</code> casually &mdash; which is exactly what you will be tempted to do when tuning
+around a slow overlay &mdash; and you can create a window where the old primary still believes it is
+primary while a new one has been elected.
+</figcaption>
+</figure>
+
+<div class="box bad">
+  <span class="tag">Split-brain prevention is a demotion, not a partition heal</span>
+  <p>
+  Patroni cannot tell "the DCS is down" from "I am partitioned away." It assumes the worst and
+  <strong>demotes PostgreSQL to read-only the moment it cannot refresh the leader lock</strong> &mdash;
+  a <code>retry_timeout</code>-graceful, <code>ttl</code>-worst-case shutdown.
+  </p>
+  <p style="margin-top:12px">
+  This is the good news: a flaky overlay causes an <strong>outage</strong>, not data loss, and it takes
+  every cluster sharing that DCS at once. Patroni's <code>failsafe_mode</code> relaxes it &mdash; the
+  primary re-confirms itself against every known member over <code>:21001</code> instead of trusting the
+  DCS. Turn it on, but read its sharp edges first: it only covers some DCS error paths, and an
+  <code>etcdserver: no leader</code> error has been reported to bypass it and force a demotion anyway.
+  </p>
+</div>
+
+<h2>09 &nbsp;/&nbsp; Synchronous replication</h2>
+
+<p>
+This is the decision you made, and for an e-commerce store it is the right one. Here is exactly what it
+buys, what it costs, and the one setting that makes it cheap.
+</p>
+
+<h3>What "synchronous" actually means</h3>
+<p>
+A normal commit is: write the change locally, tell the client "OK", done. With
+<code>synchronous_mode: on</code> it becomes three steps:
+</p>
+<ol>
+  <li>Write the change locally.</li>
+  <li><strong>Wait until at least one other Pod has flushed that change to its own disk.</strong></li>
+  <li>Only then tell the client "OK".</li>
+</ol>
+<p>
+So when your app receives success, the change physically exists on two machines. If the writer's node dies
+one millisecond later, the other machine has the order. That is the entire guarantee, and it is exactly the
+failure you said you could not accept &mdash; a customer charged, and no order record.
+</p>
+
+<h3>The thing that is easy to misunderstand</h3>
+<p>
+Synchronous mode does <strong>not</strong> mean every standby is identical. At three Pods you have:
+</p>
+<ul>
+  <li><strong>one writer</strong> (the primary),</li>
+  <li><strong>one synchronous standby</strong> that is never behind &mdash; every commit is flushed to it
+      before you are told "OK",</li>
+  <li><strong>one asynchronous standby</strong> that may lag slightly, and is a spare.</li>
+</ul>
+<p>
+Patroni maintains the synchronous role, so that standby is never the lagging one. The Pod that lags is the
+spare, and it is only ever touched when nothing better is available. So the shape you described &mdash; one
+writer, a reader that might be a touch behind, and the third being fine because it is a spare &mdash; is
+exactly what strict synchronous replication gives you. You get the shape <em>and</em> the guarantee.
+</p>
+
+<h3>Your hosts are not equidistant, and that matters</h3>
+<p>
+Step 2 above is a network round trip, so it lands on your write latency. And your three machines are not
+evenly placed:
+</p>
+<ul>
+  <li><strong>Oracle VPS A to Oracle VPS B: ~1-2&nbsp;ms.</strong> Same region, same private network.</li>
+  <li><strong>Either VPS to your home machine: ~25-30&nbsp;ms.</strong> Over the public internet, encrypted.</li>
+</ul>
+<p>
+Patroni picks the synchronous standby by <em>replication lag</em>, not by distance, so it may choose the
+30&nbsp;ms peer when a 1&nbsp;ms one is available. Tagging the far Pod <code>nosync: true</code> removes it
+from eligibility and forces synchronous replication onto the near one.
+</p>
+
+<div class="box ok">
+  <span class="tag">The same guarantee, about fifteen times less waiting</span>
+  <p>
+  <code>nosync</code> changes nothing about durability. It changes only <em>which network your writes wait
+  on</em>. For a catalogue you would not notice either version; for checkout, 2&nbsp;ms instead of 30&nbsp;ms
+  is the difference between a snappy store and one that feels like it is thinking.
+  </p>
+  <p style="margin-top:12px">
+  Crucially, <code>nosync</code> does <strong>not</strong> exclude a Pod from elections. It is still a
+  valid failover target. It is only skipped when choosing who to wait on. And if the near standby dies,
+  Patroni reassigns the synchronous role to the far Pod automatically, so writes stay safe &mdash; just
+  slower for as long as that lasts.
+  </p>
+</div>
+
+<pre><code># patroni.yml on the Pod that should never be the synchronous standby
+tags:
+  nosync: true
+
+# Nothing else changes. If you ever move both VPS to one machine and the
+# home node to the other, flip which Pod carries the tag. One line.</code></pre>
+
+<h3>The curve: 3 &rarr; 2 &rarr; 1</h3>
+<p>
+The rule underneath all of it: <strong>a write is only allowed if a copy lands on a second machine before
+you are told "OK".</strong>
+</p>
+
+<figure>
+<div class="figbox">
+<svg viewBox="0 0 1120 400" role="img" aria-label="Degradation curve: three Pods serve reads and writes, two Pods serve reads and writes, one Pod is read-only">
+  <defs>
+    <marker id="s1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5f6a7d"/></marker>
+  </defs>
+
+  <!-- panel 1 -->
+  <rect x="24" y="20" width="330" height="250" rx="12" fill="#0c1614" stroke="#2a5a48" stroke-width="1.5"/>
+  <text class="s-tiny" x="44" y="46" fill="#6ee7b7">PODS ALIVE: 3</text>
+  <circle cx="70" cy="86" r="13" fill="#fb7185"/><text class="s-tiny" x="70" y="90" text-anchor="middle" fill="#2a0d16" font-weight="700">P</text>
+  <circle cx="112" cy="86" r="13" fill="#a78bfa"/>
+  <circle cx="154" cy="86" r="13" fill="#a78bfa"/>
+  <text class="s-tiny" x="180" y="90" fill="#8b95a8">primary + 2 replicas</text>
+  <text class="s-mono" x="44" y="126" fill="#34d399">writes: YES</text>
+  <text class="s-mono" x="44" y="146" fill="#34d399">reads:  YES</text>
+  <text class="s-tiny" x="44" y="172">one replica is the synchronous standby</text>
+  <text class="s-tiny" x="44" y="188">and flushes before commit returns.</text>
+  <text class="s-tiny" x="44" y="204">The other is a spare &mdash; either replica can</text>
+  <text class="s-tiny" x="44" y="220">be promoted, so there is no data loss on</text>
+  <text class="s-tiny" x="44" y="236">primary failure.</text>
+  <rect x="44" y="248" width="130" height="18" rx="9" fill="#34d399"/>
+  <text class="s-tiny" x="109" y="261" text-anchor="middle" fill="#062b1e" font-weight="700">FULL SERVICE</text>
+
+  <!-- panel 2 -->
+  <rect x="395" y="20" width="330" height="250" rx="12" fill="#0c1614" stroke="#2a5a48" stroke-width="1.5"/>
+  <text class="s-tiny" x="415" y="46" fill="#6ee7b7">PODS ALIVE: 2</text>
+  <circle cx="441" cy="86" r="13" fill="#fb7185"/><text class="s-tiny" x="441" y="90" text-anchor="middle" fill="#2a0d16" font-weight="700">P</text>
+  <circle cx="483" cy="86" r="13" fill="#a78bfa"/>
+  <circle cx="525" cy="86" r="13" fill="none" stroke="#4a5468" stroke-width="1.5" stroke-dasharray="2 2"/>
+  <text class="s-tiny" x="551" y="90" fill="#8b95a8">one replica gone</text>
+  <text class="s-mono" x="415" y="126" fill="#34d399">writes: YES</text>
+  <text class="s-mono" x="415" y="146" fill="#34d399">reads:  YES</text>
+  <text class="s-tiny" x="415" y="172">the survivor is the synchronous standby,</text>
+  <text class="s-tiny" x="415" y="188">so durability still holds &mdash; but if it dies</text>
+  <text class="s-tiny" x="415" y="204">too there is nothing left. This is the last</text>
+  <text class="s-tiny" x="415" y="220">state with a safety net under it.</text>
+  <text class="s-tiny" x="415" y="240" fill="#fb7185">no spare: primary failure is now a real outage</text>
+  <rect x="415" y="248" width="130" height="18" rx="9" fill="#f59e0b"/>
+  <text class="s-tiny" x="480" y="261" text-anchor="middle" fill="#2b1a03" font-weight="700">DEGRADED, NO SPARE</text>
+
+  <!-- panel 3 -->
+  <rect x="766" y="20" width="330" height="250" rx="12" fill="#1a0f14" stroke="#5a2836" stroke-width="1.5"/>
+  <text class="s-tiny" x="786" y="46" fill="#fda4af">PODS ALIVE: 1</text>
+  <circle cx="812" cy="86" r="13" fill="#fb7185"/><text class="s-tiny" x="812" y="90" text-anchor="middle" fill="#2a0d16" font-weight="700">P</text>
+  <circle cx="854" cy="86" r="13" fill="none" stroke="#4a5468" stroke-width="1.5" stroke-dasharray="2 2"/>
+  <circle cx="896" cy="86" r="13" fill="none" stroke="#4a5468" stroke-width="1.5" stroke-dasharray="2 2"/>
+  <text class="s-tiny" x="922" y="90" fill="#8b95a8">no standby at all</text>
+  <text class="s-mono" x="786" y="126" fill="#fb7185">writes: BLOCKED</text>
+  <text class="s-mono" x="786" y="146" fill="#fbbf24">reads:  YES</text>
+  <text class="s-tiny" x="786" y="172">strict sync mode refuses to accept a commit</text>
+  <text class="s-tiny" x="786" y="188">it cannot replicate anywhere. And with sync</text>
+  <text class="s-tiny" x="786" y="204">mode on, an async survivor will not promote</text>
+  <text class="s-tiny" x="786" y="220">itself either, so this does not flap back</text>
+  <text class="s-tiny" x="786" y="236">into a writable single node.</text>
+  <rect x="786" y="248" width="130" height="18" rx="9" fill="#fb7185"/>
+  <text class="s-tiny" x="851" y="261" text-anchor="middle" fill="#2a0d16" font-weight="700">READ-ONLY</text>
+
+  <!-- step arrows -->
+  <line x1="354" y1="145" x2="391" y2="145" stroke="#5f6a7d" stroke-width="1.5" marker-end="url(#s1)"/>
+  <line x1="725" y1="145" x2="762" y2="145" stroke="#5f6a7d" stroke-width="1.5" marker-end="url(#s1)"/>
+
+  <!-- config -->
+  <rect x="24" y="292" width="1072" height="90" rx="10" fill="#2a2008" stroke="#fbbf24" stroke-width="1.5"/>
+  <text class="s-lbl" x="48" y="318" fill="#fcd34d">The three settings that produce exactly this curve</text>
+  <text class="s-mono" x="48" y="344" fill="#a5f3e6">synchronous_mode: on           &nbsp;&mdash; an async-only survivor will not promote itself, so you never get a silent single-writer</text>
+  <text class="s-mono" x="48" y="364" fill="#a5f3e6">synchronous_mode_strict: true  &nbsp;&mdash; without this, Patroni quietly drops sync replication and the primary accepts writes anyway</text>
+  <text class="s-mono" x="48" y="378" fill="#a5f3e6">synchronous_node_count: 1      &nbsp;&mdash; one durable copy is enough; set 2 and you would need three Pods to write at all</text>
+</svg>
+</div>
+<figcaption>
+<b>Read the middle panel carefully.</b> "Two Pods, still writing" is only safe because the surviving
+replica is a synchronous standby. If you ever want a different curve &mdash; async everywhere, or sync
+across a slow uplink &mdash; change <code>synchronous_mode</code> and re-derive this table, do not just
+tune it and hope.
+</figcaption>
+</figure>
+
+<div class="box warn">
+  <span class="tag">The two behaviours that surprise people, stated plainly</span>
+  <p>
+  <strong>1. The cluster can sit read-only with a live Pod.</strong> If the writer dies and the only
+  survivor is an <em>asynchronous</em> replica, Patroni will not promote it automatically &mdash; because it
+  cannot prove that Pod has every committed write. So you get a running Pod that is refusing to write, and
+  nothing appears broken. This is the design working: the alternative is promoting a Pod that silently
+  dropped your last orders. When you want it anyway, <code>pgdbaas failover --force</code> promotes it and
+  tells you what may be lost.
+  </p>
+  <p style="margin-top:12px">
+  <strong>2. Strict mode is not atomic, and one config value closes most of the gap.</strong> If a backend
+  is cancelled while waiting for the replication acknowledgement &mdash; a client-side statement timeout,
+  say &mdash; the commit can already be durable locally while your app is told it failed. The practical fix
+  is boring: <strong>keep every client <code>statement_timeout</code> comfortably above your worst-case
+  commit time</strong>. With the <code>nosync</code> tag, that means above about 30&nbsp;ms, so 5&nbsp;seconds
+  is a safe choice and 25&nbsp;milliseconds is a bug waiting for a slow evening.
+  </p>
+  <p style="margin-top:12px">
+  If you ever want reads from the synchronous standby to be guaranteed <em>current</em> rather than merely
+  flush-current, set <code>synchronous_commit: remote_apply</code>. It makes the primary wait until the
+  standby has replayed the change into its data files, not just written the log. More latency, stronger
+  read guarantee. The default <code>on</code> is right for your case.
+  </p>
+</div>
+
+<div class="box ok">
+  <span class="tag">The row people skip: two Pods</span>
+  <p>
+  Two Pods is <strong>not</strong> "half degraded". It is <em>the safety net is gone</em>. Writes still
+  work and are still safe, but there is no spare: a writer failure is now a genuine outage until a node
+  comes back, rather than a thirty-second blip. Worth knowing before you are one node down and surprised.
+  </p>
+</div>
+
+
+<!-- ============================================================ -->
+<h2>10 &nbsp;/&nbsp; Bootstrapping with one script</h2>
+
+<p>
+You want one command that takes a list of hosts and ends with a working three-node cluster, and you do not
+want to be hand-editing <code>authorized_keys</code> or any other config on three machines. Fair. The shape
+is: <strong>a single script you copy to each machine and run once.</strong>
+</p>
+
+<pre><code># on each of the three hosts, as root:
+scp pgdbaas-node.sh you@10.0.0.4:/tmp/
+ssh you@10.0.0.4 'sudo /tmp/pgdbaas-node.sh --id n1'
+
+# That is the whole install. The script:
+#   1. prints every action it is about to take, and waits for you
+#   2. installs cloudflare-warp and enrols this host as a Mesh node
+#   3. installs and configures Docker
+#   4. scans the reserved port range and reports anything already taken
+#   5. writes /etc/pgdbaas/node.json  { id, mesh_ip }
+#   6. installs the manager and its control socket
+#   7. adds the control machine's key, restricted to one fixed command
+#   8. is idempotent - safe to re-run after a failure or a reinstall</code></pre>
+
+<p>
+Then the control machine does the rest:
+</p>
+
+<ol>
+  <li><strong>Pin by node-id, not by IP.</strong> The script writes the id to disk at first boot and the spec
+      keys off that, so DHCP or a changed address does not reshuffle your cluster.</li>
+  <li><strong>Install the SSH restriction <em>as part of the script</em>,</strong> not by hand. The control
+      machine can only ever run one fixed command on a host &mdash; never open a shell, never forward a port.
+      You never touch this file; the script writes it and shows you the line it wrote.</li>
+  <li><strong>Verify before you trust.</strong> After install, the control machine checks the Mesh route, the
+      MTU, clock skew, and the DCS quorum, and refuses to continue with the name of the check that failed.</li>
+</ol>
+
+<div class="box info">
+  <span class="tag">On the trust question, honestly</span>
+  <p>
+  A restricted key means the remote side can only do one thing. A script you run means you trust the whole
+  script. That is a real difference, and the mitigation is not clever &mdash; it is that the script is short,
+  it lives in this repository, and step 1 makes it print what it is about to do. Read it once, run it, and
+  the control surface is contained.
+  </p>
+</div>
+
+<figure>
+<div class="figbox">
+<svg viewBox="0 0 1120 330" role="img" aria-label="The CLI bootstraps three hosts in parallel over SSH, enrolling each as a Mesh node, installing the manager, then writes the cluster spec">
+  <defs>
+    <marker id="c1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2dd4bf"/></marker>
+  </defs>
+
+  <rect x="30" y="110" width="200" height="110" rx="10" fill="#0d2b2a" stroke="#2dd4bf" stroke-width="1.5"/>
+  <text class="s-lbl" x="50" y="136" fill="#5eead4">CLI</text>
+  <text class="s-tiny" x="50" y="158">pgdbaas node add</text>
+  <text class="s-tiny" x="50" y="174">--host --user --id</text>
+  <text class="s-tiny" x="50" y="196">holds no state</text>
+
+  <path d="M234,140 L330,52" fill="none" stroke="#2dd4bf" stroke-width="1.75" marker-end="url(#c1)"/>
+  <path d="M234,165 L330,150" fill="none" stroke="#2dd4bf" stroke-width="1.75" marker-end="url(#c1)"/>
+  <path d="M234,190 L330,248" fill="none" stroke="#2dd4bf" stroke-width="1.75" marker-end="url(#c1)"/>
+
+  <rect x="336" y="20" width="330" height="66" rx="9" fill="#0d2b2a" stroke="#2dd4bf" stroke-width="1.25"/>
+  <text class="s-lbl" x="354" y="44" fill="#5eead4">1 &middot; enrol as a Mesh node</text>
+  <text class="s-tiny" x="354" y="62">warp-cli connector new &lt;token&gt;</text>
+  <text class="s-tiny" x="354" y="78">device profile must use MASQUE, not WireGuard</text>
+
+  <rect x="336" y="118" width="330" height="66" rx="9" fill="#0d2b2a" stroke="#2dd4bf" stroke-width="1.25"/>
+  <text class="s-lbl" x="354" y="142" fill="#5eead4">2 &middot; install the runtime</text>
+  <text class="s-tiny" x="354" y="160">docker, configured for --network host</text>
+  <text class="s-tiny" x="354" y="176">newsubuid/newgid not needed &mdash; this is rootful</text>
+
+  <rect x="336" y="216" width="330" height="66" rx="9" fill="#0d2b2a" stroke="#2dd4bf" stroke-width="1.25"/>
+  <text class="s-lbl" x="354" y="240" fill="#5eead4">3 &middot; start the manager</text>
+  <text class="s-tiny" x="354" y="258">write /etc/pgdbaas/node.json  { id, mesh_ip }</text>
+  <text class="s-tiny" x="354" y="274">the manager blocks until it can take its node lease</text>
+
+  <path d="M670,53 L740,53 L740,140 L764,140" fill="none" stroke="#60a5fa" stroke-width="1.75" marker-end="url(#a2)"/>
+  <path d="M670,151 L740,151" fill="none" stroke="#60a5fa" stroke-width="1.75" marker-end="url(#a2)"/>
+  <path d="M670,249 L740,249 L740,162 L764,162" fill="none" stroke="#60a5fa" stroke-width="1.75" marker-end="url(#a2)"/>
+
+  <rect x="770" y="110" width="300" height="86" rx="10" fill="#2a2008" stroke="#fbbf24" stroke-width="1.5"/>
+  <text class="s-lbl" x="790" y="136" fill="#fcd34d">managers take their leases</text>
+  <text class="s-tiny" x="790" y="156">etcd forms, quorum 2, spec key appears</text>
+  <text class="s-tiny" x="790" y="172">each manager reconciles, and Pods appear</text>
+  <text class="s-tiny" x="790" y="188">cluster bootstraps itself from that point on</text>
+
+  <text class="s-tiny" x="30" y="312" fill="#fb7185">&#9650;  if the CLI dies halfway through, re-running it is safe: enrolment and the manager are idempotent, and the spec is only written once all three leases are held.</text>
+  <text class="s-tiny" x="30" y="328" fill="#fbbf24">&#9650;  adding a fourth node later is the same command. It joins the DCS, gets a member entry, and can host a Pod. No reconfiguration of the others.</text>
+</svg>
+</div>
+<figcaption>
+<b>Everything after the spec write is the system talking to itself.</b> The CLI is not in the loop for
+cluster lifetime, for failover, or for Pod recreation.
+</figcaption>
+</figure>
+
+<h4>The command surface, so far</h4>
+<pre><code># --- bootstrap, run from the control machine -------------------------
+pgdbaas node add --host 10.0.0.4 --user deploy --id n1
+pgdbaas node add --host 10.0.0.5 --user deploy --id n2
+pgdbaas node add --host 10.0.0.6 --user deploy --id n3
+
+pgdbaas cluster create ecom-db --nodes n1,n2,n3 --pg 16 --env dev
+
+# --- everyday -------------------------------------------------------
+pgdbaas status                       # one screen: nodes, clusters, roles, lag
+pgdbaas doctor                      # mesh route, MTU, clock skew, quorum, volumes
+pgdbaas psql ecom-db                # opens a shell on whatever is primary
+pgdbaas topology ecom-db            # who is primary, who is streaming, how far behind
+pgdbaas switchover ecom-db --to ecom-2
+pgdbaas gateway emit ecom-db        # writes the compose env for your app
+
+# --- changing the fleet ---------------------------------------------
+pgdbaas cluster move ecom-2 --to n1
+pgdbaas node doctor n2              # drain a host for maintenance</code></pre>
+
+<p>
+Note what is missing, on purpose: nothing in that list requires the CLI to be running for the database to
+be up. <code>pgdbaas status</code> is a convenience, not a dependency.
+</p>
+
+
+<!-- ============================================================ -->
+<h2>11 &nbsp;/&nbsp; Failure drills</h2>
+
+<p>
+Design these as tests. Each has a specific correct behaviour, and the ones marked are where this design
+will actually surprise you.
+</p>
+
+<table class="tbl">
+  <thead><tr><th>Kill this</th><th>Expected</th><th>Where it goes wrong</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>The primary Pod</td>
+      <td>Leader lock TTL (30s) expires, Patroni promotes the synchronous standby &mdash; which by construction has every committed write. The gateway flips within ~2s of the new primary answering 200. No acknowledged order is lost, which is the entire point of &sect;09.</td>
+      <td class="no">Gateway holding a stale backend. HAProxy must drop sessions on mark-down, not just stop routing new ones.</td>
+    </tr>
+    <tr>
+      <td>The <em>standby</em>, primary alive</td>
+      <td>Patroni reassigns the synchronous role to the remaining replica and writes keep flowing. If that replica is the home machine, write latency temporarily becomes ~30ms until the near node returns.</td>
+      <td class="no">A client <code>statement_timeout</code> set below the new commit time. Transactions start failing &mdash; see the sharp edge in &sect;09.</td>
+    </tr>
+    <tr>
+      <td>One host</td>
+      <td>Two Pods left, still reading and writing (see &sect;09). The cluster loses its spare, so a writer failure is now a real outage rather than a blip. A new manager on a replacement host converges and you move the Pod with <code>cluster move</code>.</td>
+      <td class="no">Nothing automatic here by design. A human decides where data lives.</td>
+    </tr>
+    <tr>
+      <td>Two hosts</td>
+      <td>etcd loses quorum, every cluster demotes to read-only within <code>retry_timeout</code> + <code>ttl</code>. <em>This is the availability cliff.</em></td>
+      <td class="no">This is the one real structural weakness. etcd is pinned 1:1 to managers. Break that coupling &mdash; see &sect;12.</td>
+    </tr>
+    <tr>
+      <td>The gateway</td>
+      <td>The app's connections fail. Recreate the gateway, or use a second one. The cluster is completely unaffected.</td>
+      <td class="no">If the app has only one gateway and no pool retry, the outage looks like a database outage. It isn't.</td>
+    </tr>
+    <tr>
+      <td>The application host</td>
+      <td>Nothing. It is a client. The cluster keeps running and you lose only the storefront.</td>
+      <td>Nothing. This is a feature and worth testing so you trust it.</td>
+    </tr>
+    <tr>
+      <td>Mesh for 60s</td>
+      <td>Patroni in every cluster loses the DCS and its peers, primaries demote. Nothing corrupts, everything goes read-only, and it recovers on its own.</td>
+      <td class="maybe">With <code>failsafe_mode</code> on, a primary that can still reach all its Pods keeps its lock. Decide deliberately.</td>
+    </tr>
+    <tr>
+      <td>One Pod's network, silently</td>
+      <td>Patroni marks it down, gateways stop selecting it, it rejoins from the base backup. A TCP-checked proxy would keep sending writes to a partitioned primary &mdash; this is why the REST check is mandatory.</td>
+      <td class="no">Any component that health-checks the data port instead of the REST <code>/primary</code> endpoint will eventually write to a replica or a zombie.</td>
+    </tr>
+    <tr>
+      <td>A Pod that was down comes back</td>
+      <td>It rejoins as a <strong>replica</strong> &mdash; it is <em>not</em> promoted, and it does not become primary just by returning. If its WAL is a clean subset of the primary's it just resumes streaming. If it diverged, Patroni either rewinds it back or wipes and re-clones from a base backup. Either way, once caught up it is a full candidate for future elections.</td>
+      <td class="no">Your instinct &mdash; "it should forget the bad data and get fresh data" &mdash; is exactly right, and Patroni does it without being asked. The cost is a base backup over the mesh, so a large database rebuilding onto the home machine is the slow case. <code>wal_log_hints: on</code> is what makes the rewind path fast instead of forcing a full re-clone.</td>
+    </tr>
+    <tr>
+      <td>A host reboot</td>
+      <td>Everything comes back. Postgres is only ever started by Patroni.</td>
+      <td class="no">Anything that can also start Postgres &mdash; a stray unit, a compose restart policy &mdash; is a split-brain waiting to happen.</td>
+    </tr>
+    <tr>
+      <td>Reimage a host, keep the old id</td>
+      <td>The new manager cannot take the node lease and exits with a clear error. You enrol it as a new node instead.</td>
+      <td class="no">Without the lease: two Pods named the same thing on one volume. This is the failure the lease in &sect;02 exists to prevent.</td>
+    </tr>
+  </tbody>
+</table>
+
+
+<!-- ============================================================ -->
+<h2>12 &nbsp;/&nbsp; HAProxy, concretely</h2>
+
+<p>
+The gateway's entire job. Note that this is the same config whether the gateway runs in your app's
+compose file or on a host of its own.
+</p>
+
+<pre><code>global
+  maxconn 4096
+  # no aggressive idle timeout: an e-commerce worker can hold a
+  # connection for minutes across many small transactions
+
+defaults
+  mode  tcp
+  log  global
+  retries 2
+  option  dontlognull
+  timeout connect   4s
+  timeout client    30m
+  timeout server    30m
+  timeout check     3s
+
+# ---------- writes : only the current primary passes this check ----------
+listen pg_write
+  bind 127.0.0.1:5432
+  balance first                     # only one server is ever UP; this costs nothing
+  option httpchk GET /primary
+  http-check expect status 200
+
+  # the two settings that stop a write landing on a demoted primary
+  on-marked-down shutdown-sessions
+  default-server inter 2s fall 3 rise 2 on-marked-down shutdown-sessions
+
+  server ecom-0 100.96.0.11:21000 check port 21001 maxconn 200
+  server ecom-1 100.96.0.12:21002 check port 21001 maxconn 200
+  server ecom-2 100.96.0.13:21004 check port 21001 maxconn 200
+
+# ---------- reads : replicas only, and only ones that are actually caught up ----
+listen pg_read
+  bind 127.0.0.1:5433
+  balance leastconn
+  option httpchk GET /replica
+  http-check expect status 200
+  http-check send meth GET uri /readiness?lag=16777216
+  on-marked-down shutdown-sessions
+  default-server inter 2s fall 3 rise 2 on-marked-down shutdown-sessions
+  server ecom-0 100.96.0.11:21000 check port 21001
+  server ecom-1 100.96.0.12:21002 check port 21001
+  server ecom-2 100.96.0.13:21004 check port 21001
+
+listen stats
+  bind 127.0.0.1:7001
+  stats enable
+  stats uri /</code></pre>
+
+<div class="box warn">
+  <span class="tag">Why <code>option httpchk</code> and not a TCP check</span>
+  <p>
+  A TCP check to <code>21000</code> passes on the primary <em>and</em> on every replica, because a hot
+  standby accepts connections. You would load-balance writes across the whole cluster and watch the app
+  throw <code>cannot execute INSERT in a read-only transaction</code> after every failover. Patroni's
+  REST API exists so a proxy can ask the question a socket cannot: <em>are you the leader right now, and
+  do you still hold the lock?</em>
+  </p>
+</div>
+
+<h4>And the Pod side</h4>
+<pre><code># patroni.yml, generated by the manager, per Pod
+name: ecom-1
+scope: ecom-db
+restapi:
+  listen: 0.0.0.0:21003
+  connect_address: 100.96.0.12:21003   # MESH address - this is why the REST port must be routable
+postgresql:
+  connect_address: 100.96.0.12:21002   # MESH address - what replicas dial
+  listen: 0.0.0.0:21002
+  parameters:
+    wal_level: replica
+    hot_standby: 'on'
+    max_wal_senders: 10
+    max_replication_slots: 10
+    wal_log_hints: 'on'                # required for pg_rewind, which is what makes a rejoin fast
+    # pg_hba can be written against real Mesh addresses here, which is
+    # the practical payoff of host networking
+    unix_socket_directories: '/var/run/postgresql'
+
+# manager-side hooks
+#   on_role_change: reload the gateway, or issue pgbouncer-style RECONNECT
+#   so pooled backends to a demoted primary are dropped immediately</code></pre>
+
+
+<!-- ============================================================ -->
+<h2>13 &nbsp;/&nbsp; Backup and point-in-time recovery</h2>
+
+<p>
+Until this section existed, the system was highly available and completely unprotected &mdash; a bad
+migration or a dropped table would have taken the database with it, redundancy and all. This is the
+design that closes that gap.
+</p>
+
+<h3>The tool, and why</h3>
+<p>
+<strong>WAL-G</strong> (a single static binary) writing to a <strong>Cloudflare R2</strong> bucket. Three
+properties decided it:
+</p>
+<ul>
+  <li><strong>No backup server.</strong> WAL-G talks to object storage directly. That means no extra machine
+      to keep alive &mdash; which matters more than usual here, because another always-on node would be
+      another vote in the DCS quorum and another thing that can take your clusters down.</li>
+  <li><strong>Configuration is environment variables.</strong> The manager generates them per Pod. There is
+      no config file for you to hand-edit, which was an explicit requirement.</li>
+  <li><strong>It can prove its own backups are restorable.</strong> <code>wal-verify</code> walks the archive
+      and reports any segment that is missing, which is precisely the failure that silently turns
+      "point-in-time recovery" into "I can only go back to Tuesday."</li>
+</ul>
+<p>
+I looked hard at <strong>pgBackRest</strong>, which has the better feature story &mdash; page-level
+incrementals, parallel restore, and real repository verification. Two things ruled it out. It wants to
+co-locate with the database host or reach it over SSH, which is a poor fit for config this system
+generates. And in April 2026 its sole maintainer archived the entire project; a sponsor coalition revived
+it within a week, so it is healthy now, but I did not want a single-maintainer dependency sitting in the
+critical path of "get my database back." <strong>Barman</strong> needs a dedicated backup server, which
+defeats the first point above.
+</p>
+
+<figure>
+<div class="figbox">
+<svg viewBox="0 0 1120 470" role="img" aria-label="WAL-G runs inside each Pod, archives to two R2 buckets continuously, base backups run on a schedule from whichever Pod is primary, and a nightly pg_dump goes to a second Cloudflare account">
+  <defs>
+    <marker id="k1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#a78bfa"/></marker>
+    <marker id="k2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#fbbf24"/></marker>
+    <marker id="k3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#34d399"/></marker>
+    <marker id="k4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2dd4bf"/></marker>
+  </defs>
+
+  <text class="s-tiny" x="24" y="24" letter-spacing="1.4">INSIDE THE CLUSTER &mdash; NO NEW NODE, NO NEW COMPONENT TO RUN</text>
+
+  <rect x="24" y="36" width="300" height="150" rx="11" fill="#1a1430" stroke="#a78bfa" stroke-width="1.5"/>
+  <text class="s-lbl" x="44" y="60" fill="#c4b5fd">Pod ecom-0 &nbsp;&middot;&nbsp; VPS A</text>
+  <text class="s-tiny" x="44" y="80">WAL-G in the image, env from the manager</text>
+  <text class="s-tiny" x="44" y="102" fill="#c084fc">archive_command = wal-g wal-push</text>
+  <text class="s-tiny" x="44" y="120">every Pod archives, not just the primary,</text>
+  <text class="s-tiny" x="44" y="136">so a leader change cannot open a gap</text>
+  <text class="s-tiny" x="44" y="160" fill="#8b95a8">restore_command = wal-g wal-fetch</text>
+  <text class="s-tiny" x="44" y="176" fill="#8b95a8">archive_command = wal-verify, hourly</text>
+
+  <rect x="24" y="202" width="300" height="150" rx="11" fill="#2a1220" stroke="#fb7185" stroke-width="2"/>
+  <text class="s-lbl" x="44" y="226" fill="#fda4af">Pod ecom-1 &nbsp;&middot;&nbsp; VPS B &nbsp;PRIMARY</text>
+  <text class="s-tiny" x="44" y="248" fill="#fca5a5">the manager whose Pod is primary runs:</text>
+  <text class="s-tiny" x="44" y="268" fill="#fca5a5">03:00  wal-g backup-push  (full)</text>
+  <text class="s-tiny" x="44" y="284" fill="#fca5a5">04:00  wal-g backup-push  (delta)</text>
+  <text class="s-tiny" x="44" y="306" fill="#8b95a8">no coordination needed &mdash; the DCS</text>
+  <text class="s-tiny" x="44" y="322" fill="#8b95a8">already says who the primary is</text>
+  <text class="s-tiny" x="44" y="342" fill="#8b95a8">pg_dump 03:30, compressed, second bucket</text>
+
+  <rect x="24" y="368" width="300" height="80" rx="11" fill="#1a1430" stroke="#a78bfa" stroke-width="1.25"/>
+  <text class="s-lbl" x="44" y="392" fill="#c4b5fd">Pod ecom-2 &nbsp;&middot;&nbsp; home</text>
+  <text class="s-tiny" x="44" y="412">archives its own WAL, same as the others</text>
+  <text class="s-tiny" x="44" y="432" fill="#fb7185">nosync &mdash; so it is never the backup trigger</text>
+
+  <!-- archive bus -->
+  <line x1="324" y1="111" x2="440" y2="111" stroke="#a78bfa" stroke-width="2" marker-end="url(#k1)"/>
+  <line x1="324" y1="277" x2="440" y2="277" stroke="#a78bfa" stroke-width="2" marker-end="url(#k1)"/>
+  <line x1="324" y1="408" x2="440" y2="408" stroke="#a78bfa" stroke-width="2" marker-end="url(#k1)"/>
+  <text class="s-tiny" x="382" y="104" text-anchor="middle" fill="#c084fc">WAL</text>
+  <text class="s-tiny" x="382" y="270" text-anchor="middle" fill="#c084fc">WAL</text>
+  <text class="s-tiny" x="382" y="401" text-anchor="middle" fill="#c084fc">WAL</text>
+
+  <!-- bucket 1 -->
+  <rect x="446" y="60" width="300" height="150" rx="11" fill="#2a2008" stroke="#fbbf24" stroke-width="1.5"/>
+  <text class="s-lbl" x="466" y="84" fill="#fcd34d">R2 &mdash; your account</text>
+  <text class="s-tiny" x="466" y="104">pgdbaas/ecom-db/pg16/</text>
+  <text class="s-tiny" x="466" y="126" fill="#fbbf24">fulls 7 &middot; deltas 14 &middot; 14d window</text>
+  <text class="s-tiny" x="466" y="146">encrypted at rest, key never in the DCS</text>
+  <text class="s-tiny" x="466" y="170" fill="#34d399">this is the PITR engine</text>
+  <text class="s-tiny" x="466" y="190" fill="#34d399">$0.015/GB-month, no egress fees</text>
+
+  <!-- bucket 2 -->
+  <rect x="446" y="300" width="300" height="148" rx="11" fill="#0d2b26" stroke="#34d399" stroke-width="1.5"/>
+  <text class="s-lbl" x="466" y="324" fill="#a7f3d0">R2 &mdash; a second account</text>
+  <text class="s-tiny" x="466" y="344">pgdbaas/ecom-db/dumps/</text>
+  <text class="s-tiny" x="466" y="366">nightly pg_dump, compressed</text>
+  <text class="s-tiny" x="466" y="386" fill="#34d399">different tool, different login</text>
+  <text class="s-tiny" x="466" y="410" fill="#8b95a8">survives WAL-G breaking, an account</text>
+  <text class="s-tiny" x="466" y="428" fill="#8b95a8">lockout, or a retention bug</text>
+
+  <line x1="324" y1="342" x2="440" y2="342" stroke="#34d399" stroke-width="2" marker-end="url(#k3)"/>
+
+  <!-- verify -->
+  <rect x="790" y="60" width="306" height="180" rx="11" fill="#0d2230" stroke="#38bdf8" stroke-width="1.5"/>
+  <text class="s-lbl" x="810" y="84" fill="#7dd3fc">Automatic verification</text>
+  <text class="s-tiny" x="810" y="108">after every full backup:</text>
+  <text class="s-tiny" x="810" y="130">1. wal-verify  &mdash; any missing WAL?</text>
+  <text class="s-tiny" x="810" y="152">2. restore into a scratch Pod</text>
+  <text class="s-tiny" x="810" y="172">3. does it boot?  SELECT 1, row counts</text>
+  <text class="s-tiny" x="810" y="194">4. tear it down, record the result</text>
+  <text class="s-tiny" x="810" y="220" fill="#34d399">free, because R2 egress is free</text>
+  <text class="s-tiny" x="810" y="236" fill="#8b95a8">the result is what status displays</text>
+
+  <line x1="746" y1="135" x2="786" y2="135" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="4 3"/>
+
+  <!-- drill -->
+  <rect x="790" y="300" width="306" height="148" rx="11" fill="#0d2b2a" stroke="#2dd4bf" stroke-width="1.25"/>
+  <text class="s-lbl" x="810" y="324" fill="#5eead4">Monthly drill</text>
+  <text class="s-tiny" x="810" y="348">pgdbaas verify ecom-db --full</text>
+  <text class="s-tiny" x="810" y="368">picks a random instant inside the</text>
+  <text class="s-tiny" x="810" y="384">PITR window and really recovers to it</text>
+  <text class="s-tiny" x="810" y="406" fill="#5eead4">this is the only test that proves</text>
+  <text class="s-tiny" x="810" y="422" fill="#5eead4">PITR works, rather than assuming it</text>
+  <text class="s-tiny" x="810" y="440" fill="#8b95a8">reports the wall-clock time it took</text>
+
+  <text class="s-tiny" x="24" y="466" fill="#fbbf24">&#9650;  every Pod archives its own WAL. One primary archiving alone is cheaper, and a failover mid-segment would leave a hole in the archive.</text>
+</svg>
+</div>
+<figcaption>
+<b>Nothing new to operate.</b> WAL-G is a binary inside the Pod image, configured by the manager from
+environment variables. The scheduled jobs run on whichever manager already holds a Pod that is primary
+&mdash; the DCS has already told everyone who that is, so no coordination is needed.
+</figcaption>
+</figure>
+
+<h3>Nothing to configure, on purpose</h3>
+<p>
+If enabling backups is a separate step you have to remember, you will forget it. So
+<code>pgdbaas cluster create</code> provisions them, and the defaults are the ones you would have picked:
+</p>
+<table class="tbl">
+  <thead><tr><th>Default</th><th>Value</th><th>Why this one</th></tr></thead>
+  <tbody>
+    <tr><td>WAL archiving</td><td>continuous, from every Pod</td><td>This is what makes point-in-time recovery possible at all. RPO is measured in seconds.</td></tr>
+    <tr><td>Full backup</td><td>03:00 daily</td><td>Restore time is roughly proportional to how much WAL you replay after a full.</td></tr>
+    <tr><td>Delta backup</td><td>04:00 daily</td><td>Cheap insurance, and it shortens the worst-case replay.</td></tr>
+    <tr><td>Retention</td><td>7 fulls, 14 days of WAL</td><td>Two weeks back is long enough to notice a slow problem and still fix it.</td></tr>
+    <tr><td>Encryption</td><td>on, key off the DCS</td><td>A leaked bucket should not be a leaked database.</td></tr>
+    <tr><td>Verification</td><td>after every full</td><td>Free, automatic, and the only way to know.</td></tr>
+  </tbody>
+</table>
+<p>
+Everything is still changeable, but with a key=value form on the command that owns the thing, rather than
+a config file:
+</p>
+<pre><code>pgdbaas cluster set ecom-db backup.retention=30d backup.schedule="0 3 * * *"
+pgdbaas backup now ecom-db          # take one immediately
+pgdbaas backup list ecom-db         # what exists, how big, how old
+pgdbaas backup prune ecom-db        # dry run. prints the plan, deletes nothing</code></pre>
+
+<div class="box ok">
+  <span class="tag">Encryption key handling, briefly</span>
+  <p>
+  Generated once, printed once so you can put it in a password manager, and stored on the three managers
+  &mdash; <strong>not</strong> in the DCS, because the DCS is readable by every Pod in every cluster. If all
+  three hosts are lost, the backups are still readable: by you, with that one passphrase.
+  </p>
+</div>
+
+<h3>The one screen that answers "am I safe?"</h3>
+<p>
+This is the most valuable thing in the whole section. Most people discover their backups are broken at
+restore time, which is the worst possible moment. So backup health is a first-class line in
+<code>pgdbaas status</code>, and it goes red when it should:
+</p>
+
+<pre><code>$ pgdbaas status
+
+  ecom-db       running   primary ecom-1 (VPS B)   lag 0s
+    last full backup     6h ago     full 03:00        ok
+    last WAL archived   40s ago                       ok
+    PITR window          14 days (since 16 Sep)      ok
+    last verified        9h ago     restore drill     passed
+    recoverable to       any moment in the last 14 days
+    size in bucket       2.1 GB                      ~$0.03/mo
+
+  billing-db     running   primary ecom-... (home)
+    last full backup     31h ago                     LATE
+    last WAL archived   6h ago                       STUCK
+    PITR window          4 days (since 26 Sep)      DEGRADED
+    last verified        never                       never run
+    size in bucket       840 MB</code></pre>
+
+<p>
+A stuck archive is the loud one. It means the window is closing right now, and it is the failure that
+turns into a disaster if you find out a week later. <code>pgdbaas doctor</code> names the cause, and
+<code>pgdbaas backup repair ecom-db</code> fixes the common ones (a rotated credential, a bucket that
+stopped accepting writes, a Pod that came up with the wrong env).
+</p>
+
+<div class="box warn">
+  <span class="tag">Make it shout without a monitoring stack</span>
+  <p>
+  You do not have Prometheus here, and you should not build one to find out your backups are broken. Put a
+  systemd timer on the control machine: <code>pgdbaas doctor --quiet</code> every fifteen minutes,
+  appending to a log, plus one line that mails you on failure if you want. And because the gateway
+  already runs a health endpoint for your app, it can expose <code>/backup-status</code> &mdash; so an
+  external uptime check covers this too.
+  </p>
+</div>
+
+<h3>A restore is a create, not a destroy</h3>
+<p>
+This is the single most important decision in the backup design, and it is a UX decision as much as a
+technical one.
+</p>
+<p>
+The intuitive version of a restore &mdash; wipe the cluster, load the backup, start serving &mdash; means
+that if you pick the wrong timestamp, you have just destroyed the data you were trying to save. That is
+how a bad afternoon becomes a bad month.
+</p>
+<p>
+So the default creates a <em>new</em> cluster alongside the old one. Nothing is destroyed until you
+deliberately destroy it:
+</p>
+
+<figure>
+<div class="figbox">
+<svg viewBox="0 0 1120 430" role="img" aria-label="Restoring to a point in time creates a new cluster next to the old one, which stays intact until explicitly removed, after which the gateway can be repointed">
+  <defs>
+    <marker id="r1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2dd4bf"/></marker>
+    <marker id="r2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#fb7185"/></marker>
+    <marker id="r3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#38bdf8"/></marker>
+  </defs>
+
+  <text class="s-tiny" x="24" y="24" letter-spacing="1.4">THE DEFAULT PATH &mdash; NOTHING IS DESTROYED</text>
+
+  <rect x="24" y="36" width="290" height="130" rx="11" fill="#0d2230" stroke="#38bdf8" stroke-width="1.5"/>
+  <text class="s-lbl" x="44" y="60" fill="#7dd3fc">1 &middot; you say when</text>
+  <text class="s-mono" x="44" y="86" fill="#a5f3e6">pgdbaas restore ecom-db \</text>
+  <text class="s-mono" x="54" y="102" fill="#a5f3e6">  --to "1 hour ago" --as ecom-recovered</text>
+  <text class="s-tiny" x="44" y="126">plain English timestamps, taken from your</text>
+  <text class="s-tiny" x="44" y="142">application's own logs</text>
+  <text class="s-tiny" x="44" y="160" fill="#8b95a8">also: "before the deploy", "15:32 UTC"</text>
+
+  <line x1="314" y1="100" x2="356" y2="100" stroke="#2dd4bf" stroke-width="2" marker-end="url(#r1)"/>
+
+  <rect x="360" y="36" width="290" height="130" rx="11" fill="#1a1430" stroke="#a78bfa" stroke-width="1.5"/>
+  <text class="s-lbl" x="380" y="60" fill="#c4b5fd">2 &middot; a new cluster appears</text>
+  <text class="s-tiny" x="380" y="84">three Pods, like any other cluster</text>
+  <text class="s-tiny" x="380" y="102">own ports, own scope, own gateway config</text>
+  <text class="s-tiny" x="380" y="124" fill="#c084fc">replays WAL from the last full backup</text>
+  <text class="s-tiny" x="380" y="142">up to exactly the moment you named</text>
+  <text class="s-tiny" x="380" y="160" fill="#8b95a8">prints the wall-clock time it took</text>
+
+  <line x1="650" y1="100" x2="692" y2="100" stroke="#a78bfa" stroke-width="2"/>
+
+  <rect x="696" y="36" width="200" height="130" rx="11" fill="#0c1614" stroke="#2a5a48" stroke-width="1.5"/>
+  <text class="s-lbl" x="716" y="60" fill="#6ee7b7">3 &middot; the old one is</text>
+  <text class="s-lbl" x="716" y="78" fill="#6ee7b7">still right there</text>
+  <text class="s-tiny" x="716" y="102">still serving your app</text>
+  <text class="s-tiny" x="716" y="120">compare the two, query both,</text>
+  <text class="s-tiny" x="716" y="136">run your tests against the</text>
+  <text class="s-tiny" x="716" y="152">recovered copy</text>
+
+  <line x1="796" y1="166" x2="796" y2="196" stroke="#38bdf8" stroke-width="2" marker-end="url(#r3)"/>
+
+  <rect x="696" y="200" width="400" height="86" rx="11" fill="#0d2230" stroke="#38bdf8" stroke-width="1.5"/>
+  <text class="s-mono" x="716" y="226" fill="#7dd3fc">pgdbaas gateway point ecom-recovered</text>
+  <text class="s-tiny" x="716" y="248">the app reconnects and lands on the recovered cluster.</text>
+  <text class="s-tiny" x="716" y="266">the old one keeps running until you delete it, on purpose.</text>
+
+  <text class="s-tiny" x="24" y="222" letter-spacing="1.4">THE IN-PLACE PATH &mdash; EXISTS, AND MAKES YOU ARGUE</text>
+
+  <rect x="24" y="236" width="640" height="120" rx="11" fill="#1a0f14" stroke="#5a2836" stroke-width="1.5"/>
+  <text class="s-mono" x="44" y="262" fill="#fda4af">pgdbaas restore ecom-db --to "1 hour ago" --in-place --i-mean-it</text>
+  <text class="s-tiny" x="44" y="286">prints, in full, exactly what this destroys: every Pod, every</text>
+  <text class="s-tiny" x="44" y="302">volume, and any writes since that timestamp. then asks you to type</text>
+  <text class="s-tiny" x="44" y="318">the cluster name. there is no --force that skips that prompt.</text>
+  <text class="s-tiny" x="44" y="342" fill="#fb7185">if you only want this in a fire, you will still be glad it asked.</text>
+
+  <text class="s-tiny" x="24" y="392" fill="#34d399">&#9650;  it also sidesteps a real conflict: you cannot recover a live cluster to a point in time with</text>
+  <text class="s-tiny" x="24" y="412" fill="#fbbf24">synchronous standbys attached, because they would fight the replay. A brand-new cluster has none.</text>
+</svg>
+</div>
+<figcaption>
+<b>Restoring is the operation you will do while frightened.</b> The design goal is that a wrong
+timestamp costs you a disk, not your database. Everything else in this section is in service of that.
+</figcaption>
+</figure>
+
+<pre><code># what you will actually type, in the moment you need it
+pgdbaas backup history ecom-db                  # see what exists
+pgdbaas restore ecom-db --to "1 hour ago" --as ecom-recovered
+# ...read the output, check the row counts, then:
+pgdbaas gateway point ecom-recovered
+# ...and days later, once you are sure:
+pgdbaas cluster delete ecom-db
+
+# the delete refuses while a gateway still points at the cluster,
+# so you cannot lose a database to a typo in a name</code></pre>
+
+<h3>Redundancy, honestly</h3>
+
+<p>
+Three Pods on three hosts is not redundancy for a backup, because every one of those hosts depends on the
+same overlay, the same home connection, and the same credentials. So the backup gets its own layered
+answer, and it is worth being clear about which tiers are load-bearing and which are optional.
+</p>
+
+<table class="tbl">
+  <thead><tr><th>Tier</th><th>What</th><th>Survives</th><th>Cost</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>1 &mdash; always on</td>
+      <td>WAL-G &rarr; R2, your own account. Eleven nines of durability, offsite from home, no egress fees.</td>
+      <td>Host loss, home connection loss, Pod loss, a bad migration, an accidental <code>DROP</code>.</td>
+      <td>~$0.015/GB-month. Negligible at catalogue scale.</td>
+    </tr>
+    <tr>
+      <td>2 &mdash; always on</td>
+      <td>Nightly compressed <code>pg_dump</code> &rarr; a second R2 bucket in a <strong>second Cloudflare
+      account</strong>. Deliberately a different tool and a different login.</td>
+      <td>WAL-G breaking, this account being locked out or compromised, a retention bug, silent corruption
+      in the WAL archive.</td>
+      <td>Negligible. One bucket and one scheduled job.</td>
+    </tr>
+    <tr>
+      <td>3 &mdash; optional</td>
+      <td>Mirror the dump to a second provider. The only tier covering "Cloudflare is having a bad day at
+      the exact moment you need a restore."</td>
+      <td>A Cloudflare-wide outage, including the storage API being unreachable mid-recovery.</td>
+      <td>~$6/TB/year, plus egress when you actually restore.</td>
+    </tr>
+    <tr>
+      <td>4 &mdash; not recommended</td>
+      <td>A local copy on each of the three hosts.</td>
+      <td>Nothing that matters. All three depend on the same mesh and the same power supply.</td>
+      <td>Wasted disk, and a false sense of safety.</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="box warn">
+  <span class="tag">What tiers 1 and 2 together actually buy you</span>
+  <p>
+  Losing your Cloudflare account, your bucket, or your backup tooling: <strong>covered</strong>. Cloudflare
+  having a regional outage while you are mid-restore: <strong>not covered</strong> without tier 3 &mdash;
+  though the window is narrow, because a storage outage does not take your database down, only your ability
+  to recover during it.
+  </p>
+  <p style="margin-top:12px">
+  I would start on tiers 1 and 2, and add tier 3 the first time you find yourself rehearsing a restore and
+  notice you are holding your breath for a provider. That is a reasonable trigger, and it can be deferred.
+  </p>
+</div>
+
+<div class="box bad">
+  <span class="tag">The retention footgun, designed around</span>
+  <p>
+  After a major PostgreSQL upgrade the internal timeline number resets, and ordering by name can decide your
+  <em>newest</em> backups are old and delete them. That is a real documented behaviour, and it bites on
+  exactly the week you upgraded.
+  </p>
+  <p style="margin-top:12px">
+  The fix is structural: <strong>one storage path per major version</strong>
+  (<code>pgdbaas/ecom-db/pg16/</code>, <code>pgdbaas/ecom-db/pg17/</code>), so retention never sees two
+  timelines mixed. Pruning is a dry run by default, and the manager refuses to prune a history with fewer
+  than two fulls.
+  </p>
+</div>
+
+<h3>What this does not cover</h3>
+<ul>
+  <li><strong>Recovery point.</strong> With continuous archiving it is the gap between WAL segments &mdash;
+  seconds in practice. A restore is bounded below by your last full plus the WAL replay, and the monthly
+  drill is what gives you the real number instead of the imagined one.</li>
+  <li><strong>Recovery time.</strong> Proportional to database size and to the mesh. A restore pulling
+  gigabytes from R2 down to your home machine is slower than the same restore to an OCI box. Measure it
+  during the drill rather than discovering it.</li>
+  <li><strong>Logical corruption.</strong> Backups faithfully preserve a dropped table; nothing in a physical
+  backup design can tell you a row was deleted by mistake. Catching that needs dump diffs or checksums on
+  critical tables &mdash; a separate project.</li>
+  <li><strong>A stolen passphrase.</strong> Encryption at rest makes a leaked bucket useless, but whoever
+  holds the passphrase can read everything. Treat it like the database password.</li>
+</ul>
+
+<div class="box ok">
+  <span class="tag">The part that actually matters</span>
+  <p>
+  Everything above is plumbing. What protects you is the <strong>automatic verification after every full
+  backup</strong>, and a broken archive turning a line in <code>pgdbaas status</code> red instead of
+  remaining a surprise. A backup you have never restored is a hypothesis, not a backup &mdash; and because
+  R2 has no egress fees, testing that hypothesis costs a few minutes of disk and nothing else.
+  </p>
+</div>
+
+
+<!-- ============================================================ -->
+<h2>14 &nbsp;/&nbsp; Lifecycle: the rest</h2>
+
+<p>
+Backup and recovery are designed. These remain, and each is smaller than the section above.
+</p>
+
+<table class="tbl">
+  <thead><tr><th>Surface</th><th>Decision it needs</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Deletion</td>
+      <td>Two-phase and hard to do by accident. <code>pgdbaas cluster delete ecom-db</code> refuses while any
+      gateway still points at the cluster, because a cluster name is load-bearing in a live app's config.
+      Then it asks you to type the name. Only after that does it destroy Pods, volumes, <em>and</em>
+      backups &mdash; the last behind a separate flag, since orphaned backups cost money and hide the fact
+      that a database ever existed.</td>
+    </tr>
+    <tr>
+      <td>Secrets</td>
+      <td>Database passwords cannot live in the DCS, because every Pod in every cluster can read it. Each Pod
+      gets a generated credential the manager hands out once at creation; the superuser password is sealed
+      with a key held only on the managers. The backup encryption key follows the same rule.</td>
+    </tr>
+    <tr>
+      <td>Upgrades</td>
+      <td>PostgreSQL major upgrades and manager upgrades both want a drain: stop placing Pods on a host, take
+      it out, upgrade, put it back. A major upgrade is also when the storage path changes in this section,
+      and the moment the restore path deserves retesting before you need it.</td>
+    </tr>
+    <tr>
+      <td>Decoupling the DCS</td>
+      <td>The availability cliff in &sect;11. A fourth always-on machine holding only the third etcd vote is
+      the cheapest fix &mdash; it need not be powerful, just never off. Note that the backup design
+      deliberately adds no such node.</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2>15 &nbsp;/&nbsp; Open questions</h2>
+
+<p>
+Most of what was open in revision 2 is now closed. These are the ones that remain, and they are all
+answerable without redesigning anything.
+</p>
+
+<ol>
+  <li><strong>Backups, and when.</strong> The one question that actually matters. Nothing in this document
+  protects you from a bad migration, an accidental <code>DROP</code>, or a corrupted volume. Until WAL
+  archiving exists, the cluster is highly available and completely unprotected. See &sect;13.</li>
+  <li><strong>Does the application host stay put?</strong> The gateway reaches the Pods over the mesh, so
+  whatever runs Medusa has to be a Mesh participant. Right now that is assumed to be a server. If you ever
+  want to run the storefront from a laptop, the laptop gets enrolled and the gateway comes with it &mdash;
+  the design survives, but the mesh node count grows.</li>
+  <li><strong>How many clusters will this carry?</strong> One DCS holds hundreds of clusters by namespace,
+  so this scales fine in principle. But each Pod takes two ports from the reserved range, and a host running
+  eight Pods has a port map worth checking against <code>pgdbaas status</code> before you lose track of it.</li>
+  <li><strong>Is <code>nosync</code> still pointing at the right Pod in six months?</strong> It is a tag
+  expressing a physical fact &mdash; that one host is far away. If you move the VPS, or add a fourth node
+  next to them, the tag should move. Consider having <code>pgdbaas doctor</code> measure actual RTT
+  between hosts and tell you when the assumption no longer holds.</li>
+  <li><strong>What is your actual catalogue size?</strong> A re-clone is a base backup over the mesh. At
+  ~2&nbsp;ms between the VPS that is fast; a large database rebuilding onto the home machine at 30&nbsp;ms
+  will take noticeably longer. Worth measuring before you need it.</li>
+</ol>
+
+</div>
+</body>
+</html>
