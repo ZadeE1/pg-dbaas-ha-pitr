@@ -11,7 +11,7 @@ the DCS and the Pod volumes.
 
 ## Ownership
 
-- Architecture decisions and their rationale: `architecture.html` (revision 3)
+- Architecture decisions and their rationale: `architecture.html` (revision 4)
 - Implementation: not started
 
 ## Local Contracts
@@ -41,11 +41,24 @@ the DCS and the Pod volumes.
 - **The far Pod carries `nosync: true`.** Your two Oracle VPS are ~1-2ms apart; home is ~25-30ms. The tag
   keeps writes waiting on the near link. It is a physical fact encoded in config and must be revisited if
   the hosts move.
+- **Backups are WAL-G to R2, with no backup server.** One static binary per Pod, env-var config, so
+  backups add no node to the DCS quorum. Do not introduce barman (needs a server) or move the design onto
+  pgBackRest without weighing its single-maintainer history.
+- **A restore creates a new cluster; it never overwrites the live one in place.** The default is
+  `restore --as <name>`. In-place restore requires `--i-mean-it` plus typing the cluster name. Do not add a
+  flag that skips that prompt.
+- **Every full backup is verified automatically, and a broken archive turns `status` red.** R2 has no
+  egress fees, so this is free. Do not make verification opt-in.
+- **One storage path per major PostgreSQL version.** Timeline numbers reset on upgrade, and retention
+  ordered by name will then delete the newest backups. This is a documented footgun, not a hypothetical.
 - **The DCS is a sidecar, not a manager.** It is the only leader-ful component, pinned 1:1 to managers.
   That coupling is the system's known availability cliff.
 
 ## Work Guidance
 
+- **The document must teach from the ground up.** A reader arriving at `architecture.html` has no prior
+  context. §00 "Start here" explains the whole system in plain words, lists prerequisites, defines every
+  invented term, and walks the first hour. Preserve that when editing.
 - Validate architectural claims against vendor and upstream documentation before encoding them. The
   rationale in `architecture.html` cites sources; keep that property as it grows.
 - `architecture.html` is self-contained: inline CSS, inline SVG, no external assets, no build step, no
@@ -53,15 +66,15 @@ the DCS and the Pod volumes.
 - Diagrams are hand-authored inline SVG with explicit `viewBox` coordinates. There is no label
   auto-placement, so check text against its enclosing panel, not just the canvas — a canvas-bounds check
   will not catch a label overflowing its box. Decode HTML entities before measuring string width.
-- Expand abbreviations on first use. The document keeps a glossary; add to it rather than assuming.
 - Prefer Patroni + etcd over bespoke replication or leader election. Do not build custom failover.
-- Lifecycle surfaces (backup, PITR, deletion, secrets, upgrades) are deliberately undesigned. See §13
-  before implementing any of them.
+- Lifecycle surfaces (deletion, secrets, upgrades) remain undesigned. See §14 before implementing.
 
 ## Verification
 
-None yet. No build, test, or lint tooling — `architecture.html` is a static document. When implementation
-begins, record the check commands here.
+- `architecture.html` must parse as valid HTML and render from `file://`. No build or test tooling exists
+  yet; when implementation begins, record the check commands here.
+- When editing, validate after every structural change: unclosed tags, SVG marker references, and text
+  that overflows its panel. Large in-place edits to this file have broken tag nesting before.
 
 ## Child DOX Index
 
